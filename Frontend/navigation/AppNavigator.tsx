@@ -5,10 +5,10 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator, NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
-import { supabase } from '../supabaseClient';
+import * as SecureStore from 'expo-secure-store';
 
 // Import your existing app screens
-import WelcomeScreen from '../app/Welcome';
+import WelcomeScreen from '../app/index';
 import LoginScreen from '../app/Login';
 import SignupScreen from '../app/Signup';
 import PatientDashboard from '../app/PatientDashboard';
@@ -130,21 +130,12 @@ export default function AppNavigator() {
 
   useEffect(() => {
     const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      const session = data?.session;
+      const role = await SecureStore.getItemAsync('userRole');
 
-      if (session?.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', session.user.id)
-          .single();
-
-        if (profile?.role === 'doctor') {
-          setInitialRoute('DoctorTabs');
-        } else {
-          setInitialRoute('PatientTabs');
-        }
+      if (role === 'Doctor') {
+        setInitialRoute('DoctorTabs');
+      } else if (role === 'Patient') {
+        setInitialRoute('PatientTabs');
       } else {
         setInitialRoute('Welcome');
       }

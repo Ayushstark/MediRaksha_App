@@ -13,6 +13,7 @@ import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import { LinearGradient } from 'expo-linear-gradient';
+import { getDoctorAppointments } from '../services/medirakshaApi';
 
 interface Appointment {
     _id: string;
@@ -38,8 +39,8 @@ export default function MeetingRequests() {
 
     const fetchMeetings = async () => {
         try {
-            const response = await API.get('/doctor/appointments');
-            setMeetings(response.data || []);
+            const response = await getDoctorAppointments();
+            setMeetings(response || []);
         } catch (error) {
             console.error('Error fetching appointments:', error);
         } finally {
@@ -54,7 +55,11 @@ export default function MeetingRequests() {
     const handleAction = async (id: string, status: string) => {
         setActing(id);
         try {
-            await API.patch(`/doctor/appointments/${id}`, { status });
+            if (status === 'cancelled') {
+                await API.delete(`/doctor/meetings/${id}`);
+            } else {
+                await API.patch(`/doctor/meetings/${id}/status`, { status });
+            }
             setMeetings(prev => prev.map(m => m._id === id ? { ...m, status: status as any } : m));
         } catch (error: any) {
             Alert.alert('Error', error.response?.data?.msg || 'Action failed');

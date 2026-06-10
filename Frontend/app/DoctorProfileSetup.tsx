@@ -16,6 +16,7 @@ import { Ionicons, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import { LinearGradient } from 'expo-linear-gradient';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 export default function DoctorProfileSetup() {
     const router = useRouter();
@@ -32,14 +33,13 @@ export default function DoctorProfileSetup() {
 
     const fetchProfile = async () => {
         try {
-            const response = await API.get('/doctor/');
-            const data = response.data;
+            const data = await getCurrentProfile('Doctor');
             setFormData({
-                doctorId: data.doctorId || '',
+                doctorId: data.doctorId || data.id || '',
                 name: data.name || '',
                 age: data.age?.toString() || '',
                 hospital: data.hospital || '',
-                specialization: data.specialization || '',
+                specialization: data.specialization || data.speciality || '',
             });
         } catch (error) {
             console.error('Error fetching doctor profile:', error);
@@ -61,8 +61,10 @@ export default function DoctorProfileSetup() {
 
         setSaving(true);
         try {
-            await API.patch('/doctor/update', {
-                ...formData,
+            await API.patch('/doctor/info/update', {
+                name: formData.name,
+                hospital: formData.hospital,
+                speciality: formData.specialization,
                 age: parseInt(formData.age) || 0,
             });
             Alert.alert('Success', 'Profile updated successfully!', [

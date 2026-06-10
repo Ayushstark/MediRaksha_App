@@ -14,6 +14,7 @@ import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { getCurrentProfile, getDoctorSlots, publishDoctorSlot, toDateString } from '../services/medirakshaApi';
 
 const TIMES = [
     "09:00 - 09:15",
@@ -34,13 +35,13 @@ const TIMES = [
 ];
 
 const WEEKDAYS = [
-    { label: 'Mon', value: 0 },
-    { label: 'Tue', value: 1 },
-    { label: 'Wed', value: 2 },
-    { label: 'Thu', value: 3 },
-    { label: 'Fri', value: 4 },
-    { label: 'Sat', value: 5 },
-    { label: 'Sun', value: 6 },
+    { label: 'Mon', value: 1 },
+    { label: 'Tue', value: 2 },
+    { label: 'Wed', value: 3 },
+    { label: 'Thu', value: 4 },
+    { label: 'Fri', value: 5 },
+    { label: 'Sat', value: 6 },
+    { label: 'Sun', value: 0 },
 ];
 
 export default function AddAvailability() {
@@ -64,13 +65,11 @@ export default function AddAvailability() {
     const fetchInitialData = async () => {
         try {
             setFetching(true);
-            // 1. Get Doctor Profile
-            const docRes = await API.get('/doctor');
-            setDoctorId(docRes.data?._id || "");
+            const doctor = await getCurrentProfile('Doctor');
+            setDoctorId(doctor.id || doctor._id || "");
 
-            // 2. Get My Existing Slots
-            const slotsRes = await API.get('/slots/my/details');
-            setMySlots(Array.isArray(slotsRes.data) ? slotsRes.data : []);
+            const slots = await getDoctorSlots();
+            setMySlots(Array.isArray(slots) ? slots : []);
         } catch (error) {
             console.error("Failed to fetch initial doctor data:", error);
         } finally {
@@ -106,30 +105,40 @@ export default function AddAvailability() {
 
         setLoading(true);
         try {
-            // Prevent timezone shift by adjusting for local offset before converting to ISODate
-            const offset = date.getTimezoneOffset();
-            const localDate = new Date(date.getTime() - (offset * 60 * 1000));
-            const dateStr = localDate.toISOString().split('T')[0];
+            const dateStr = toDateString(date);
+            const created: any[] = [];
 
-            const payload = {
-                doctorId,
-                times: selectedTimes,
-                ...(publishMode === 'weekly'
-                    ? { startDate: dateStr, weekdays: selectedWeekdays, weeks: Math.max(1, Math.min(parseInt(weeks) || 1, 12)) }
-                    : { date: dateStr }),
-            };
+            if (publishMode === 'weekly') {
+                const weekCount = Math.max(1, Math.min(parseInt(weeks) || 1, 12));
+                const start = new Date(`${dateStr}T00:00:00`);
+                for (let offset = 0; offset < weekCount * 7; offset += 1) {
+                    const current = new Date(start);
+                    current.setDate(start.getDate() + offset);
+                    if (!selectedWeekdays.includes(current.getDay())) continue;
+                    for (const time of selectedTimes) {
+                        const result = await publishDoctorSlot(toDateString(current), time.slice(0, 5));
+                        created.push(result);
+                    }
+                }
+            } else {
+                for (const time of selectedTimes) {
+                    const result = await publishDoctorSlot(dateStr, time.slice(0, 5));
+                    created.push(result);
+                }
+            }
 
-            const { data } = await API.post(publishMode === 'weekly' ? '/slots/create-weekly' : '/slots/create', payload);
-
-            Alert.alert("Success", data.message || "Slots published successfully!");
+            Alert.alert("Success", `${created.length || selectedTimes.length} slot(s) published successfully!`);
             setSelectedTimes([]);
             setSelectedWeekdays([]);
-            fetchInitialData(); // Refresh list
         } catch (error: any) {
-            console.error("Publish Error:", error.response?.data);
-            Alert.alert("Error", error.response?.data?.detail || error.response?.data?.message || "Failed to publish slots.");
+            const message =
+                error.response?.data?.detail ||
+                error.response?.data?.message ||
+                error.message ||
+                "Failed to publish slots.";
+            console.error("Publish Error:", message);
+            Alert.alert("Error", message);
         } finally {
-            setLoading(true); // Wait for refresh
             await fetchInitialData();
             setLoading(false);
         }
@@ -143,7 +152,7 @@ export default function AddAvailability() {
                 style: 'destructive',
                 onPress: async () => {
                     try {
-                        await API.delete(`/slots/${slotId}`);
+                        await API.delete(`/doctor/slot/${slotId}`);
                         await fetchInitialData();
                     } catch (error: any) {
                         Alert.alert('Error', error.response?.data?.detail || 'Could not cancel slot.');

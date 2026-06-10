@@ -12,8 +12,19 @@ import {
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import Animated, { FadeIn, SlideInRight } from 'react-native-reanimated';
+import API from '../apiClient';
 
-const GROQ_API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY || "";
+const displayText = (value: any, fallback = 'Not available'): string => {
+    if (typeof value === 'string') return value.trim() || fallback;
+    if (Array.isArray(value)) return value.map(item => displayText(item, '')).filter(Boolean).join('\n');
+    if (value && typeof value === 'object') {
+        return Object.entries(value)
+            .map(([key, item]) => `${key.replace(/[_-]+/g, ' ')}: ${displayText(item, '')}`)
+            .filter(line => !line.endsWith(': '))
+            .join('\n') || fallback;
+    }
+    return value == null ? fallback : String(value);
+};
 
 export default function AIDiagnosis() {
     const router = useRouter();
@@ -31,39 +42,11 @@ export default function AIDiagnosis() {
         setDiagnosis(null);
 
         try {
-            if (!GROQ_API_KEY) {
-                Alert.alert('AI Error', 'AI diagnosis is not configured.');
-                return;
-            }
-
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: 'llama3-8b-8192',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: 'You are a professional medical assistant. Analyze the symptoms provided and give a preliminary assessment. Format your response in JSON with "condition", "severity", "advice", and "specialist".'
-                        },
-                        {
-                            role: 'user',
-                            content: symptoms
-                        }
-                    ],
-                    response_format: { type: 'json_object' }
-                }),
-            });
-
-            const data = await response.json();
-            const result = JSON.parse(data.choices[0].message.content);
-            setDiagnosis(result);
-        } catch (error) {
+            const response = await API.post('/diagnoses', { symptoms });
+            setDiagnosis(response.data);
+        } catch (error: any) {
             console.error('Groq Error:', error);
-            Alert.alert('AI Error', 'Could not process symptoms. Please try again later.');
+            Alert.alert('AI Error', error.response?.data?.detail || 'Could not process symptoms. Please try again later.');
         } finally {
             setLoading(false);
         }
@@ -109,24 +92,24 @@ export default function AIDiagnosis() {
 
                         <View style={styles.item}>
                             <Text style={styles.label}>Condition:</Text>
-                            <Text style={styles.value}>{diagnosis.condition}</Text>
+                            <Text style={styles.value}>{displayText(diagnosis.condition)}</Text>
                         </View>
 
                         <View style={styles.item}>
                             <Text style={styles.label}>Severity:</Text>
                             <Text style={[styles.value, { color: diagnosis.severity?.toLowerCase() === 'high' ? '#D32F2F' : '#2E7D32' }]}>
-                                {diagnosis.severity}
+                                {displayText(diagnosis.severity)}
                             </Text>
                         </View>
 
                         <View style={styles.item}>
                             <Text style={styles.label}>Recommended Specialist:</Text>
-                            <Text style={styles.value}>{diagnosis.specialist}</Text>
+                            <Text style={styles.value}>{displayText(diagnosis.specialist)}</Text>
                         </View>
 
                         <View style={styles.adviceBox}>
                             <Text style={styles.adviceTitle}>Advice:</Text>
-                            <Text style={styles.adviceText}>{diagnosis.advice}</Text>
+                            <Text style={styles.adviceText}>{displayText(diagnosis.advice)}</Text>
                         </View>
 
                         <Text style={styles.disclaimer}>

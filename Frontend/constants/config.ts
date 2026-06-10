@@ -3,7 +3,6 @@ import { Platform } from 'react-native';
 
 const getBackendUrls = () => {
     const configuredUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
-    if (configuredUrl) return [configuredUrl];
 
     const expoConstants = Constants as any;
     const hostUri =
@@ -12,10 +11,11 @@ const getBackendUrls = () => {
         expoConstants.manifest?.debuggerHost;
     const host = hostUri?.split(':')[0];
     const urls = [
-        host ? `http://${host}:8000/api` : undefined,
-        Platform.OS === 'android' ? 'http://10.0.2.2:8000/api' : undefined,
-        'http://127.0.0.1:8000/api',
-        'http://localhost:8000/api',
+        configuredUrl,
+        host ? `http://${host}:3000/api` : undefined,
+        Platform.OS === 'android' ? 'http://10.0.2.2:3000/api' : undefined,
+        'http://127.0.0.1:3000/api',
+        'http://localhost:3000/api',
     ].filter(Boolean) as string[];
 
     return [...new Set(urls)];
@@ -26,7 +26,7 @@ export const BACKEND_URL = BACKEND_URLS[0];
 
 export const API_ENDPOINTS = {
     AUTH: '/auth',
-    PROFILE: '/auth/profile',
-    REPORTS: '/reports',
+    PROFILE: '/user/info/detail',
+    REPORTS: '/user/report',
     DOCTOR: '/doctor',
 };

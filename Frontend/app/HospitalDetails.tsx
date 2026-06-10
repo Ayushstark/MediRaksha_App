@@ -36,6 +36,7 @@ export default function HospitalDetails() {
   const [partnerHospital, setPartnerHospital] = useState<HospitalProfile | null>(null);
   const [availability, setAvailability] = useState<HospitalAvailability | null>(null);
   const [loadingBeds, setLoadingBeds] = useState(true);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
   console.log('=== HospitalDetails mounted ===');
   console.log('hospital object:', JSON.stringify(hospital));
   console.log('hospital.id:', hospital?.id);
@@ -79,6 +80,13 @@ export default function HospitalDetails() {
 
     fetchPartnerStatus();
   }, []);
+
+  useEffect(() => {
+    if (!hospital?.name) return;
+    getDoctorsForHospital(hospital.name, hospital.speciality || 'General')
+      .then(setDoctors)
+      .catch(() => setDoctors([]));
+  }, [hospital?.name, hospital?.speciality]);
 
   if (!hospital || !userLocation) {
     return (
@@ -326,13 +334,13 @@ export default function HospitalDetails() {
         {/* Specialists Section */}
         <View style={styles.specialistsCard}>
           <Text style={styles.actionsTitle}>Specialists at this Hospital</Text>
-          {getDoctorsForHospital(hospital.name, hospital.speciality || 'General').map((dr) => (
+          {doctors.map((dr) => (
             <TouchableOpacity
               key={dr.id}
               style={styles.doctorItem}
               onPress={() => router.push({
-                pathname: '/DoctorDetails',
-                params: dr as any
+                pathname: '/BookAppointment',
+                params: { doctorId: dr.id, doctorName: dr.name, specialty: dr.specialty, hospitalName: hospital.name }
               })}
             >
               <View style={styles.drIcon}>
@@ -345,6 +353,9 @@ export default function HospitalDetails() {
               <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
             </TouchableOpacity>
           ))}
+          {doctors.length === 0 && (
+            <Text style={styles.drDegree}>No registered specialists found for this hospital.</Text>
+          )}
         </View>
 
         {/* Bed Availability Section */}

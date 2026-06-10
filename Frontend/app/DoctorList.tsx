@@ -14,6 +14,7 @@ import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-ico
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import { LinearGradient } from 'expo-linear-gradient';
+import { getDoctors } from '../services/medirakshaApi';
 
 interface Doctor {
     _id: string;
@@ -36,8 +37,7 @@ export default function DoctorList() {
 
     const fetchDoctors = async () => {
         try {
-            const response = await API.get('/user/doctors');
-            const data = Array.isArray(response.data) ? response.data : [];
+            const data = await getDoctors();
             setDoctors(data);
             setFilteredDoctors(data);
         } catch (error) {

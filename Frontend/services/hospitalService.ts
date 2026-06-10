@@ -63,7 +63,7 @@ export type BedBooking = {
 // ──────────────────────────────────────────────
 
 /**
- * Resolve a Geoapify place_id → MongoDB hospital profile
+ * Resolve a Geoapify place_id to an Aiven PostgreSQL hospital profile
  * Called in HospitalDetails.tsx on mount
  * Returns { isPartner: false } if hospital is not in our DB
  */
@@ -71,11 +71,25 @@ export async function getHospitalByPlaceId(
   placeId: string
 ): Promise<{ isPartner: boolean; hospital?: HospitalProfile }> {
   try {
-    console.log('Calling API with placeId length:', placeId.length);
-    console.log('Full URL:', `/hospitals/by-place/${placeId}`);
-    const { data } = await apiClient.get(`/hospitals/by-place/${placeId}`);
-    console.log('API response:', JSON.stringify(data));
-    return data;
+    const { data } = await apiClient.get(`/hospitals/by-place/${encodeURIComponent(placeId)}`);
+    const hospital = data?.data;
+    if (!hospital) return { isPartner: false };
+
+    return {
+      isPartner: true,
+      hospital: {
+        _id: String(hospital.id),
+        name: hospital.name,
+        geoapifyPlaceId: String(hospital.geoapifyPlaceId || hospital.place_id || hospital.id),
+        address: hospital.address || hospital.name,
+        latitude: Number(hospital.latitude || 0),
+        longitude: Number(hospital.longitude || 0),
+        phone: hospital.phone,
+        amenities: Array.isArray(hospital.amenities) ? hospital.amenities : [],
+        isPartner: hospital.isPartner !== false,
+        lastInventoryUpdate: hospital.updatedAt,
+      },
+    };
   } catch (error: any) {
     console.log('API error status:', error?.response?.status);
     console.log('API error detail:', error?.response?.data);
@@ -97,6 +111,27 @@ export async function getHospitalAvailability(
   return data;
 }
 
+export async function registerPartnerHospitals(hospitals: any[]): Promise<any[]> {
+  const { data } = await apiClient.post('/hospitals/register-partners', {
+    hospitals: hospitals.map((hospital) => ({
+      placeId: hospital.id,
+      name: hospital.name,
+      address: hospital.address,
+      latitude: hospital.latitude,
+      longitude: hospital.longitude,
+      phone: hospital.phone,
+      speciality: hospital.speciality,
+      emergency: hospital.emergency,
+    })),
+  });
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
+export async function seedNearbyPartnerHospitals(latitude: number, longitude: number): Promise<any[]> {
+  const { data } = await apiClient.post('/hospitals/seed-nearby', { latitude, longitude });
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
 /**
  * Book a bed — requires patient JWT (sent automatically by apiClient)
  * Returns the created booking doc
@@ -114,7 +149,7 @@ export async function createBedBooking(
  */
 export async function getMyBedBookings(): Promise<BedBooking[]> {
   const { data } = await apiClient.get('/bed-bookings/my');
-  return data;
+  return Array.isArray(data) ? data : [];
 }
 
 /**

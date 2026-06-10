@@ -26,7 +26,7 @@ export function useProtectedRoute(allowedRoles: Role[]) {
     // ❌ Role not allowed
     const role = profile.role?.toLowerCase();
     if (!allowedRoles.includes(role)) {
-      router.replace('/Unauthorized');
+      router.replace('/Login');
     }
   }, [loading, user, profile]);
 }

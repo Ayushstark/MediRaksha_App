@@ -14,10 +14,10 @@ import {
 } from 'react-native';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import apiClient from '../apiClient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Animated, { FadeInUp, ZoomIn } from 'react-native-reanimated';
 import { getHospitalAvailability, createBedBooking } from '../services/hospitalService';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 export default function BookBed() {
   const router = useRouter();
@@ -66,13 +66,13 @@ export default function BookBed() {
     }
 
     // Prefill patient info from the authenticated profile
-    apiClient.get('/home/')
-      .then((res) => {
-        if (res.data) {
-          setPatientName(res.data.name || '');
-          setPatientContact(res.data.phoneNumber || '');
-          setPatientAge(res.data.age ? String(res.data.age) : '');
-          setPatientGender(res.data.gender || 'Male');
+    getCurrentProfile('Patient')
+      .then((profile) => {
+        if (profile) {
+          setPatientName(profile.name || '');
+          setPatientContact(profile.phoneNumber || profile.number || '');
+          setPatientAge(profile.age ? String(profile.age) : '');
+          setPatientGender(profile.gender || 'Male');
         }
       })
       .catch((err) => {

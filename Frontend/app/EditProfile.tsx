@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import API from '../apiClient';
 import { useRouter } from 'expo-router';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 const sexOptions = ['Male', 'Female', 'Third Gender'];
 const roleOptions = ['Patient', 'Doctor'];
@@ -35,9 +36,7 @@ export default function ProfileEditScreen() {
     const fetchProfile = async () => {
       try {
         setLoading(true);
-        // Using patient-specific home profile endpoint
-        const res = await API.get('/home/');
-        const userData = res.data;
+        const userData = await getCurrentProfile('Patient');
 
         // Basic role detection from data if possible, default to Patient
         setRole(userData.role || 'Patient');
@@ -47,7 +46,7 @@ export default function ProfileEditScreen() {
           setEmail(userData.email || userData.doctorId || '');
           setAge(userData.age ? String(userData.age) : '');
           setSex(userData.gender || '');
-          setPhone(userData.phoneNumber || '');
+          setPhone(userData.phoneNumber || userData.number || '');
         }
       } catch (error: any) {
         Alert.alert('Error', 'Failed to load profile. Please login again.');
@@ -69,11 +68,11 @@ export default function ProfileEditScreen() {
 
     try {
       setSaving(true);
-      await API.patch('/home/update', {
+      await API.patch('/user/info/update', {
         name: name.trim(),
         gender: sex.trim(),
         age: Number(age),
-        phoneNumber: phone.trim()
+        number: phone.trim()
       });
 
       Alert.alert('Success', 'Profile updated successfully!');

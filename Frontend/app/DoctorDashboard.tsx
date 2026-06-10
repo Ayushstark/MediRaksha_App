@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import API from '../apiClient';
 import * as SecureStore from 'expo-secure-store';
+import { getCurrentProfile, getDoctorAppointments, getDoctorPatients } from '../services/medirakshaApi';
 
 type Appointment = {
   _id: string;
@@ -58,15 +59,15 @@ export default function DoctorDashboard() {
     try {
       setLoading(true);
       const [profileRes, appRes, patientRes, reviewRes] = await Promise.all([
-        API.get('/doctor/'),
-        API.get('/doctor/appointments'),
-        API.get('/doctor/patients'),
+        getCurrentProfile('Doctor'),
+        getDoctorAppointments(),
+        getDoctorPatients(),
         API.get('/doctor/reviews').catch(() => ({ data: { averageRating: 0, count: 0, reviews: [] } })),
       ]);
 
-      setProfile(profileRes.data);
-      setAppointments(Array.isArray(appRes.data) ? appRes.data : []);
-      setPatientsCount(Array.isArray(patientRes.data) ? patientRes.data.length : 0);
+      setProfile(profileRes);
+      setAppointments(Array.isArray(appRes) ? appRes : []);
+      setPatientsCount(Array.isArray(patientRes) ? patientRes.length : 0);
       setReviews(reviewRes.data || { averageRating: 0, count: 0, reviews: [] });
     } catch (error: any) {
       console.error('Dashboard error:', error);
@@ -104,9 +105,13 @@ export default function DoctorDashboard() {
   };
 
   const openReport = async (reportId: string) => {
-    const token = await SecureStore.getItemAsync('userToken');
-    const url = `${API.defaults.baseURL}/home/file/${reportId}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-    Linking.openURL(url);
+    try {
+      const response = await API.get(`/user/report/${reportId}`);
+      const report = response.data?.data ?? response.data;
+      Alert.alert(report.title || 'Report', `${report.originalFileName || 'Medical report'}\n${report.category || 'Uncategorized'}`);
+    } catch (error: any) {
+      Alert.alert('Unable to Open Report', error.response?.data?.detail || 'The report is not shared with you.');
+    }
   };
 
   const completeAppointment = (appointment: Appointment) => {
@@ -124,10 +129,11 @@ export default function DoctorDashboard() {
           onPress: async () => {
             setCompletingId(appointment._id);
             try {
-              await API.patch(`/doctor/appointments/${appointment._id}/complete`, {
-                reportIds: reports.map((r) => r._id),
+              await API.patch(`/doctor/meetings/${appointment._id}/status`, {
+                status: 'completed',
+                reportIds: reports.map((report) => report._id),
               });
-              await fetchData();
+              setAppointments(prev => prev.map(item => item._id === appointment._id ? { ...item, status: 'completed' } : item));
             } catch (error: any) {
               Alert.alert('Error', error.response?.data?.detail || 'Could not complete appointment.');
             } finally {

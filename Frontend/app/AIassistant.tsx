@@ -13,13 +13,17 @@ import {
 import { Audio } from 'expo-av';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { chatWithAssistantLLM } from '../services/huggingFaceService';
+import { AssistantHistoryItem, chatWithAssistantLLM } from '../services/huggingFaceService';
+
+const welcomeMessage = 'Hello! Tell me what symptom is bothering you most, and I will ask a few focused questions to better understand it.';
 
 export default function MediRakshaGuideScreen() {
   const router = useRouter();
   const [guideText, setGuideText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [reply, setReply] = useState<string | null>(null);
+  const [messages, setMessages] = useState<AssistantHistoryItem[]>([
+    { role: 'assistant', content: welcomeMessage },
+  ]);
   const [error, setError] = useState<string | null>(null);
 
   // Removed legacy health check
@@ -28,11 +32,14 @@ export default function MediRakshaGuideScreen() {
     if (!guideText.trim()) return;
     setLoading(true);
     setError(null);
-    setReply(null);
+    const message = guideText.trim();
+    const history = messages.filter(item => item.content !== welcomeMessage);
+    setMessages(current => [...current, { role: 'user', content: message }]);
+    setGuideText('');
 
     try {
-      const responseText = await chatWithAssistantLLM(guideText);
-      setReply(responseText);
+      const responseText = await chatWithAssistantLLM(message, history);
+      setMessages(current => [...current, { role: 'assistant', content: responseText }]);
     } catch (err: any) {
       setError(err?.message || 'An error occurred while connecting to AI.');
     } finally {
@@ -57,27 +64,23 @@ export default function MediRakshaGuideScreen() {
 
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.chatSection}>
-          <View style={styles.aiMessage}>
-            <View style={styles.aiAvatar}>
-              <FontAwesome5 name="robot" size={20} color="#fff" />
-            </View>
-            <View style={styles.messageBubble}>
-              <Text style={styles.messageText}>
-                Hello! I am your MediRaksha Assistant. Ask me anything about your symptoms (e.g., "I have a headache") or how to use the app!
-              </Text>
-            </View>
-          </View>
-
-          {reply && (
-            <View style={styles.aiMessage}>
-              <View style={styles.aiAvatar}>
-                <FontAwesome5 name="robot" size={20} color="#fff" />
-              </View>
-              <View style={styles.messageBubble}>
-                <Text style={styles.messageText}>{reply}</Text>
+          {messages.map((item, index) => (
+            <View
+              key={`${item.role}-${index}`}
+              style={item.role === 'user' ? styles.userMessage : styles.aiMessage}
+            >
+              {item.role === 'assistant' && (
+                <View style={styles.aiAvatar}>
+                  <FontAwesome5 name="robot" size={20} color="#fff" />
+                </View>
+              )}
+              <View style={item.role === 'user' ? styles.userBubble : styles.messageBubble}>
+                <Text style={item.role === 'user' ? styles.userMessageText : styles.messageText}>
+                  {item.content}
+                </Text>
               </View>
             </View>
-          )}
+          ))}
 
 
           {loading && (
@@ -127,6 +130,7 @@ const styles = StyleSheet.create({
   container: { flexGrow: 1, backgroundColor: '#F0F2F5' },
   chatSection: { flex: 1, padding: 20 },
   aiMessage: { flexDirection: 'row', marginBottom: 20, alignItems: 'flex-start' },
+  userMessage: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 20 },
   aiAvatar: {
     width: 40,
     height: 40,
@@ -149,6 +153,14 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
   },
   messageText: { fontSize: 15, color: '#333', lineHeight: 22 },
+  userBubble: {
+    backgroundColor: '#1A237E',
+    padding: 15,
+    borderRadius: 15,
+    borderTopRightRadius: 2,
+    maxWidth: '80%',
+  },
+  userMessageText: { fontSize: 15, color: '#fff', lineHeight: 22 },
   bottomSection: {
     flexDirection: 'row',
     alignItems: 'center',

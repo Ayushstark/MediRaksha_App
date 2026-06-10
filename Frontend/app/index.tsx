@@ -66,8 +66,10 @@ export default function WelcomeScreen() {
 
         // Fetch profile from Node.js backend to verify session
         const response = await API.get('/auth/profile');
-        const userData = response.data;
+        const userData = response.data?.profile || response.data?.user || response.data;
         const role = userData.role;
+        await SecureStore.setItemAsync('userRole', role || 'Patient');
+        await SecureStore.setItemAsync('userProfile', JSON.stringify({ ...userData, role: role || 'Patient' }));
 
         console.log('--- Session Validated! Role:', role);
 
@@ -86,10 +88,17 @@ export default function WelcomeScreen() {
           console.log('--- Server Data:', JSON.stringify(error.response.data));
         }
 
-        // If it's a server error (500, 502, 503) instead of 401, maybe don't force login immediately?
-        // But for safety, we go to Login if we can't verify the session.
-        await SecureStore.deleteItemAsync('userToken');
-        setTimeout(() => router.replace('/Login'), 2000);
+        if (error.response?.status === 401) {
+          await SecureStore.deleteItemAsync('userToken');
+          await SecureStore.deleteItemAsync('userRole');
+          await SecureStore.deleteItemAsync('userProfile');
+          setTimeout(() => router.replace('/Login'), 2000);
+          return;
+        }
+
+        const savedRole = await SecureStore.getItemAsync('userRole');
+        console.warn('--- Backend unavailable; preserving saved session.');
+        setTimeout(() => router.replace(savedRole === 'Doctor' ? '/DoctorDashboard' : '/PatientDashboard'), 2000);
       }
     };
 

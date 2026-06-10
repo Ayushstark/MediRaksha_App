@@ -24,6 +24,7 @@ import {
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import { logout } from '../services/auth';
+import { getCurrentProfile, getPatientAppointments } from '../services/medirakshaApi';
 
 export default function PatientDashboard() {
   const router = useRouter();
@@ -42,13 +43,12 @@ export default function PatientDashboard() {
   // ================= FETCH ALL DATA =================
   const fetchData = async () => {
     try {
-      // 🔐 FETCH DASHBOARD DATA FROM NODE.JS BACKEND
-      const profileRes = await API.get('/home/');
-      setProfile(profileRes.data);
+      const profileData = await getCurrentProfile('Patient');
+      setProfile(profileData);
 
       try {
-        const appRes = await API.get('/home/appointments');
-        setAppointments(appRes.data.map((a: any) =>
+        const appRes = await getPatientAppointments();
+        setAppointments(appRes.map((a: any) =>
           `${a.doctorName} - ${new Date(a.appointmentDate).toLocaleString()}`
         ));
       } catch (e) {
@@ -56,7 +56,9 @@ export default function PatientDashboard() {
       }
 
       setTip('Stay hydrated and get enough sleep 🌱');
-      setActivities([]); // Backend doesn't have a specific 'activities' model yet
+      const activityRes = await API.get('/activities');
+      const activityRows = activityRes.data?.data ?? [];
+      setActivities(Array.isArray(activityRows) ? activityRows.map((item: any) => item.description) : []);
 
       setLoading(false);
     } catch (error: any) {
@@ -131,12 +133,13 @@ export default function PatientDashboard() {
       if (!inputText.trim()) return;
 
       if (modalType === 'appointments') {
-        const response = await API.post('/appointments', { title: inputText });
-        setAppointments(prev => [...prev, inputText]);
-      } else {
-        const response = await API.post('/activities', { description: inputText });
-        setActivities(prev => [...prev, inputText]);
+        setModalVisible(false);
+        router.push('/BookAppointment');
+        return;
       }
+
+      const response = await API.post('/activities', { description: inputText });
+      setActivities(prev => [response.data.description, ...prev]);
 
       setInputText('');
       setModalVisible(false);
@@ -165,7 +168,7 @@ export default function PatientDashboard() {
             </Text>
             <Text style={styles.subtext}>Age: {profile?.age || '--'}</Text>
             <Text style={styles.subtext}>Gender: {profile?.gender || '--'}</Text>
-            <Text style={styles.subtext}>Phone: {profile?.phoneNumber || '--'}</Text>
+            <Text style={styles.subtext}>Phone: {profile?.phoneNumber || profile?.number || '--'}</Text>
             <Text style={styles.subtext}>Email: {profile?.email || '--'}</Text>
           </View>
         </Animated.View>

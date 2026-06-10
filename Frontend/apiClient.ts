@@ -4,13 +4,16 @@ import { BACKEND_URL, BACKEND_URLS } from './constants/config';
 
 const apiClient = axios.create({
     baseURL: BACKEND_URL,
-    timeout: 15000,
+    timeout: 5000,
     headers: {
         'Content-Type': 'application/json',
     },
+    withCredentials: true,
 });
 
 apiClient.interceptors.request.use(async (config) => {
+    config.withCredentials = true;
+
     const token = await SecureStore.getItemAsync('userToken');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;

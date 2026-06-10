@@ -20,6 +20,7 @@ import API from '../apiClient';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Animated, { FadeInUp, ZoomIn, SlideInRight } from 'react-native-reanimated';
 import { classifySymptom } from '../services/huggingFaceService';
+import { bookAppointment, getAvailableSlots, getDoctors, toDateString } from '../services/medirakshaApi';
 
 const SPECIALTIES = [
     { id: '1', name: 'General Physician', icon: 'stethoscope' },
@@ -71,19 +72,19 @@ export default function BookAppointment() {
     const [showSuccess, setShowSuccess] = useState(false);
     const [aiMatching, setAiMatching] = useState(false);
 
-    const { doctorName, specialty: paramSpecialty, hospitalName: paramHospitalName } = params;
+    const { doctorId, doctorName, specialty: paramSpecialty, hospitalName: paramHospitalName } = params;
 
     // 1. Fetch Doctors on Mount
     useEffect(() => {
         const loadDoctors = async () => {
             try {
-                const { data } = await API.get('/slots/doctors');
+                const data = await getDoctors();
                 const rawMap: Record<string, string[]> = {};
                 const doctors = (Array.isArray(data) ? data : []).map((doc: any) => {
                     // Store the raw availability strings for client-side slot filtering
-                    rawMap[doc._id] = Array.isArray(doc.availability) ? doc.availability : [];
+                    rawMap[doc.id] = Array.isArray(doc.availability) ? doc.availability : [];
                     return {
-                        id: doc._id,
+                        id: doc.id,
                         name: doc.name,
                         specialty: normalizeSpeciality(doc.specialization),
                         hospitalName: doc.hospital || "MediRaksha Clinic",
@@ -118,15 +119,17 @@ export default function BookAppointment() {
 
     // 3. Handle External Param (from DoctorDetails)
     useEffect(() => {
-        if (doctorName && step === 1) {
-            const found = allDoctors.find(d => d.name === doctorName);
+        if ((doctorId || doctorName) && step === 1) {
+            const found = allDoctors.find(d =>
+                (doctorId && d.id === doctorId) || (doctorName && d.name === doctorName)
+            );
             if (found) {
                 setSelectedDoctor(found);
                 setSelectedSpecialty(found.specialty);
                 setStep(3);
             }
         }
-    }, [doctorName, allDoctors, step]);
+    }, [doctorId, doctorName, allDoctors, step]);
 
     // 4. Load Slots when Doctor/Date changes
     useEffect(() => {
@@ -142,17 +145,12 @@ export default function BookAppointment() {
         setSelectedTimeSlot(null);
         setSlots([]);
 
-        // Compute the local date string (YYYY-MM-DD) safely
-        const offset = selectedDate.getTimezoneOffset();
-        const localDate = new Date(selectedDate.getTime() - (offset * 60 * 1000));
-        const dateStr = localDate.toISOString().split('T')[0];
+        const dateStr = toDateString(selectedDate);
 
         console.log(`[BookAppointment] Loading slots for doctor ${selectedDoctor.id} on ${dateStr}`);
 
         try {
-            // Try the direct API endpoint first (works after Render redeploy)
-            const response = await API.get(`/slots/${selectedDoctor.id}/${dateStr}`);
-            const responseData = response.data;
+            const responseData: any = await getAvailableSlots(selectedDoctor.id, dateStr);
 
             // Guard: if the server returned HTML instead of JSON (route missing on Render),
             // fall back to client-side filtering from the cached availability strings.
@@ -188,7 +186,7 @@ export default function BookAppointment() {
         const filtered = availability
             .filter((entry: string) => entry.startsWith(prefix))
             .map((entry: string, idx: number) => ({
-                _id: `local-${dateStr}-${idx}`,  // local ID, not a real MongoDB ID
+                _id: `local-${dateStr}-${idx}`,  // local fallback ID, not a persisted PostgreSQL slot ID
                 time: entry.replace(prefix, '').trim(),
                 status: 'available',
                 isLocalSlot: true,
@@ -234,43 +232,21 @@ export default function BookAppointment() {
             return;
         }
 
-        // Compute local date string safely
-        const offset = selectedDate.getTimezoneOffset();
-        const localDate = new Date(selectedDate.getTime() - (offset * 60 * 1000));
-        const dateStr = localDate.toISOString().split('T')[0];
+        const dateStr = toDateString(selectedDate);
 
         setLoading(true);
         try {
-            let bookingPayload: any;
-
             if (selectedTimeSlot.isLocalSlot) {
-                // Client-side slot: send doctorId + date + time
-                bookingPayload = {
-                    doctorId: selectedDoctor?.id,
-                    date: dateStr,
-                    time: selectedTimeSlot.time,
-                    patient: {
-                        name: patientInfo.name,
-                        phone: patientInfo.phone || '9999999999',
-                        age: patientInfo.age,
-                        notes: reason || 'Mobile App Booking',
-                    },
-                };
-            } else {
-                // Real API slot with MongoDB _id: use slotId directly
-                bookingPayload = {
-                    slotId: selectedTimeSlot._id,
-                    patient: {
-                        name: patientInfo.name,
-                        phone: patientInfo.phone || '9999999999',
-                        age: patientInfo.age,
-                        notes: reason || 'Mobile App Booking',
-                    },
-                };
+                throw new Error('Please select a server-published slot.');
             }
 
-            const response = await API.post('/slots/book', bookingPayload);
-            if (!response.data?.appointment?._id) {
+            const response = await bookAppointment({
+                doctorId: selectedDoctor?.id,
+                slotId: selectedTimeSlot.id || selectedTimeSlot._id,
+                appointmentDate: dateStr,
+                reasonOfAppointment: reason || 'Mobile App Booking',
+            });
+            if (!response?.appointmentId) {
                 throw new Error('Appointment confirmation was not returned by the server.');
             }
             console.log('[BookAppointment] Booking API success');

@@ -23,6 +23,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { WebView } from 'react-native-webview';
 import * as SecureStore from 'expo-secure-store';
 import API from '../apiClient';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 // ============================================
 // SCHEMA TYPES - Matching Backend Schema
@@ -55,7 +56,7 @@ type MedicalReport = {
 // ============================================
 
 // TODO:
-// - [x] Align Mobile App Report Endpoints with Website Backend (/api/home/...)
+// - [x] Align mobile report endpoints with the PostgreSQL backend (/api/user/report/...)
 // - [x] Fix In-App Document Preview (Auth & Rendering issues)
 export default function MedicalReportsScreen() {
   const router = useRouter();
@@ -106,20 +107,11 @@ export default function MedicalReportsScreen() {
     try {
       console.log('--- Initializing User in MedicalReportsScreen...');
       const storedToken = await SecureStore.getItemAsync('userToken');
-      console.log('--- Stored Token found:', !!storedToken);
-
-      if (!storedToken) {
-        console.warn('--- No token found in YourReports init. Redirecting...');
-        router.replace('/Login');
-        return;
-      }
-
       setToken(storedToken);
 
-      // Basic profile check to ensure session
-      const response = await API.get('/home/');
-      console.log('--- User Profile Loaded:', response.data._id);
-      setUserId(response.data._id);
+      const profile = await getCurrentProfile('Patient');
+      console.log('--- User Profile Loaded:', profile.id);
+      setUserId(profile.id);
     } catch (error: any) {
       console.error('❌ Auth error in YourReports:', error.response?.status || error.message);
       if (error.response?.status === 401) {
@@ -139,8 +131,16 @@ export default function MedicalReportsScreen() {
     try {
       if (!isRefresh) setLoading(true);
 
-      const response = await API.get('/home/files');
-      setReports(Array.isArray(response.data) ? response.data : []);
+      const response = await API.get('/user/report/all');
+      const rows = response.data?.data ?? [];
+      setReports(Array.isArray(rows) ? rows.map((report: any) => ({
+        ...report,
+        _id: String(report.id),
+        reportId: String(report.id),
+        patientId: String(report.userId),
+        createdAt: report.created_at,
+        updatedAt: report.updated_at,
+      })) : []);
 
     } catch (error: any) {
       console.error('❌ Fetch error:', error);
@@ -210,16 +210,16 @@ export default function MedicalReportsScreen() {
       const fileSizeMB = Math.max(1, Math.min(10, Math.ceil(fileSizeBytes / (1024 * 1024))));
 
       const formData = new FormData();
-      formData.append('report', {
+      formData.append('file', {
         uri: Platform.OS === 'ios' ? file.uri.replace('file://', '') : file.uri,
         name: file.name || `report_${Date.now()}.pdf`,
         type: file.mimeType || 'application/pdf',
       } as any);
       formData.append('title', file.name?.replace(/\.[^/.]+$/, '') || 'Medical Report');
-      formData.append('category', selectedCategory.toLowerCase());
-      formData.append('filesize', fileSizeMB.toString());
+      formData.append('category', selectedCategory === 'Discharge' ? 'other' : selectedCategory.toLowerCase());
+      formData.append('visibility', 'private');
 
-      await API.post('/home/upload', formData, {
+      await API.post('/user/report/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -252,25 +252,12 @@ export default function MedicalReportsScreen() {
       setLoading(true);
       setSelectedReport(report);
 
-      const currentToken = await SecureStore.getItemAsync('userToken');
-      if (!currentToken) {
-        Alert.alert('Session Expired', 'Please log in again.');
-        return;
+      const response = await API.get(`/user/report/${report._id}`);
+      const fullReport = response.data?.data;
+      if (!fullReport?.fileData) {
+        throw new Error('Report file data was not returned by the server.');
       }
-
-      // 🌐 FETCH BLOB AUTHENTICATED
-      const fileUrl = `${API.defaults.baseURL}/home/file/${report._id}`;
-      console.log('--- PREVIEW: Fetching authenticated blob for:', report.title);
-
-      const response = await API.get(fileUrl, {
-        responseType: 'blob',
-        headers: { Authorization: `Bearer ${currentToken}` }
-      });
-
-      // 🔄 READ BLOB TO DATA URI
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUri = reader.result as string;
+      const dataUri = `data:${fullReport.mimeType || report.mimeType || 'application/octet-stream'};base64,${fullReport.fileData}`;
         const rawMime = report.mimeType || (report.originalFileName?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
         const isImage = rawMime.startsWith('image/');
         const isPdf = rawMime === 'application/pdf';
@@ -284,14 +271,6 @@ export default function MedicalReportsScreen() {
         }
         setShowPreviewModal(true);
         setLoading(false);
-      };
-
-      reader.onerror = () => {
-        Alert.alert('Error', 'Failed to read document data.');
-        setLoading(false);
-      };
-
-      reader.readAsDataURL(response.data);
 
     } catch (error: any) {
       console.error('❌ Open error:', error);
@@ -302,12 +281,7 @@ export default function MedicalReportsScreen() {
 
   const downloadReport = async (report: MedicalReport) => {
     try {
-      const currentToken = token || (await SecureStore.getItemAsync('userToken'));
-      const fileUrl = `${API.defaults.baseURL}/home/file/${report._id}${currentToken ? `?token=${currentToken}` : ''}`;
-      console.log('--- Downloading authenticated URL:', fileUrl);
-      Linking.openURL(fileUrl).catch(err => {
-        Alert.alert('Error', 'Unable to download report');
-      });
+      await openReport(report);
     } catch (e) {
       Alert.alert('Error', 'Failed to retrieve auth token');
     }
@@ -315,18 +289,27 @@ export default function MedicalReportsScreen() {
 
   const shareReport = async (report: MedicalReport) => {
     try {
-      const currentToken = token || (await SecureStore.getItemAsync('userToken'));
-      const fileUrl = `${API.defaults.baseURL}/home/file/${report._id}${currentToken ? `?token=${currentToken}` : ''}`;
-
       await Share.share({
-        message: `Medical Report: ${report.originalFileName || report.title || 'Report'}\nView here: ${fileUrl}`,
-        url: fileUrl, // iOS only
+        message: `Medical Report: ${report.originalFileName || report.title || 'Report'}`,
         title: report.originalFileName || report.title || 'Medical Report',
       });
     } catch (err) {
       Alert.alert('Error', 'Failed to share report');
     }
     setShowActionMenu(false);
+  };
+
+  const toggleDoctorSharing = async (report: MedicalReport) => {
+    const visibility = report.visibility === 'shared' ? 'private' : 'shared';
+    try {
+      await API.patch(`/user/report/${report._id}/visibility`, { visibility });
+      setReports(prev => prev.map(item => item._id === report._id ? { ...item, visibility } : item));
+      setSelectedReport(prev => prev?._id === report._id ? { ...prev, visibility } : prev);
+      setShowActionMenu(false);
+      Alert.alert('Sharing Updated', visibility === 'shared' ? 'Your doctors can now access this report.' : 'This report is private again.');
+    } catch (error: any) {
+      Alert.alert('Unable to Update Sharing', error.response?.data?.detail || 'Please try again.');
+    }
   };
 
   const deleteReport = (report: MedicalReport) => {
@@ -340,7 +323,7 @@ export default function MedicalReportsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await API.delete(`/home/file/${report._id}`);
+              await API.delete(`/user/report/${report._id}`);
               Alert.alert('Deleted', 'Report has been removed');
               fetchReports();
             } catch (error: any) {
@@ -359,7 +342,7 @@ export default function MedicalReportsScreen() {
     setShowAnalysisModal(true);
 
     try {
-      const response = await API.post('/reports/analyze', { fileId: report._id });
+      const response = await API.post('/analyze-report', { fileId: report._id });
       setAnalysisResult(response.data);
     } catch (error: any) {
       Alert.alert('Analysis Error', error.response?.data?.message || error.message || 'AI Analysis failed.');
@@ -685,10 +668,10 @@ export default function MedicalReportsScreen() {
 
             <TouchableOpacity
               style={styles.actionItem}
-              onPress={() => selectedReport && shareReport(selectedReport)}
+              onPress={() => selectedReport && toggleDoctorSharing(selectedReport)}
             >
-              <Ionicons name="share-social" size={22} color="#1A237E" />
-              <Text style={styles.actionItemText}>Share</Text>
+              <Ionicons name={selectedReport?.visibility === 'shared' ? 'lock-closed' : 'people'} size={22} color="#1A237E" />
+              <Text style={styles.actionItemText}>{selectedReport?.visibility === 'shared' ? 'Make Private' : 'Share with Doctors'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -801,10 +784,7 @@ export default function MedicalReportsScreen() {
             <TouchableOpacity
               style={styles.previewCloseButton}
               onPress={() => {
-                const url = previewImage || previewPdf || '';
-                // If it's the Google Docs URL, we want the RAW authenticated URL for sharing
-                const reportUrl = `${API.defaults.baseURL}/home/file/${selectedReport?._id}?token=${token}`;
-                if (reportUrl) Share.share({ url: reportUrl, message: `Check out my medical report: ${selectedReport?.title}\n${reportUrl}` });
+                if (selectedReport) shareReport(selectedReport);
               }}
             >
               <Ionicons name="share-outline" size={24} color="#fff" />
@@ -819,15 +799,8 @@ export default function MedicalReportsScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.previewCloseButton, { marginLeft: 8 }]}
-              onPress={async () => {
-                const currentToken = await SecureStore.getItemAsync('userToken');
-                if (!currentToken) {
-                  Alert.alert('Error', 'No authentication key found. Please re-login.');
-                  return;
-                }
-                const reportUrl = `${API.defaults.baseURL}/home/file/${selectedReport?._id}?token=${encodeURIComponent(currentToken)}`;
-                console.log('--- GLOBE: Opening URL in System Browser');
-                Linking.openURL(reportUrl);
+              onPress={() => {
+                Alert.alert('Not Available', 'The referenced backend returns reports from the database, not a public browser URL.');
               }}
             >
               <Ionicons name="globe-outline" size={24} color="#fff" />
