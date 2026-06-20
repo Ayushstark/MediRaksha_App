@@ -7,7 +7,14 @@ export const toDateString = (value: Date) => {
 
 export const normalizeSpeciality = (value: any) => {
   const text = String(value || '').trim();
-  return text || 'General';
+  const normalized = text.toLowerCase();
+  if (!normalized || normalized === 'general' || normalized === 'general medicine') return 'General Physician';
+  if (normalized === 'cardiology' || normalized === 'cardiologist') return 'Cardiologist';
+  if (normalized === 'neurology' || normalized === 'neurologist') return 'Neurologist';
+  if (normalized === 'orthopedics' || normalized === 'orthopedic') return 'Orthopedics';
+  if (normalized === 'pediatrics' || normalized === 'pediatrician') return 'Pediatrics';
+  if (normalized === 'dermatology' || normalized === 'dermatologist') return 'Dermatology';
+  return text;
 };
 
 export const normalizeDoctor = (doctor: any) => ({
@@ -46,8 +53,10 @@ export const normalizeSlot = (slot: any) => ({
   ...slot,
   _id: String(slot.id ?? slot._id ?? ''),
   id: String(slot.id ?? slot._id ?? ''),
-  date: slot.bookingDate,
-  time: String(slot.slotTime || '').slice(0, 5),
+  bookingDate: String(slot.bookingDate ?? slot.date ?? '').slice(0, 10),
+  date: String(slot.date ?? slot.bookingDate ?? '').slice(0, 10),
+  slotTime: String(slot.slotTime ?? slot.time ?? '').slice(0, 5),
+  time: String(slot.time ?? slot.slotTime ?? '').slice(0, 5),
 });
 
 export async function getCurrentProfile(role?: string) {
@@ -58,15 +67,42 @@ export async function getCurrentProfile(role?: string) {
 }
 
 export async function getDoctors() {
-  const response = await API.get('/user/doctor/search/Dr');
-  const doctors = response.data?.data ?? response.data ?? [];
-  return Array.isArray(doctors) ? doctors.map(normalizeDoctor) : [];
+  const byId = new Map<string, any>();
+  const addDoctors = (items: any) => {
+    const doctors = Array.isArray(items) ? items : items ? [items] : [];
+    doctors.map(normalizeDoctor).forEach((doctor) => {
+      if (doctor.id) byId.set(doctor.id, doctor);
+    });
+  };
+
+  try {
+    const myDoctor = await API.get('/user/doctor/my');
+    addDoctors(myDoctor.data?.data ?? myDoctor.data);
+  } catch (error: any) {
+    if (error?.response?.status && error.response.status !== 404) {
+      console.warn('Could not fetch registered doctor:', error.response.status);
+    }
+  }
+
+  const searchTerms = ['ra', 'ar', 'ma', 'sh', 'ch', 'an', 'dr', 'ku', 'pa', 'sa', 'ka', 'na'];
+  const responses = await Promise.allSettled(
+    searchTerms.map(term => API.get(`/user/doctor/search/${encodeURIComponent(term)}`))
+  );
+
+  responses.forEach((result) => {
+    if (result.status === 'fulfilled') {
+      addDoctors(result.value.data?.data ?? result.value.data);
+    }
+  });
+
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function getAvailableSlots(doctorId: string, date: string) {
-  const response = await API.get(`/user/meetings/slot/${doctorId}`, { params: { date } });
+  const response = await API.get(`/user/meetings/slot/${doctorId}`, { params: date ? { date } : undefined });
   const slots = response.data?.availableSlots ?? response.data?.data ?? [];
-  return Array.isArray(slots) ? slots.map(normalizeSlot) : [];
+  const normalizedSlots = Array.isArray(slots) ? slots.map(normalizeSlot) : [];
+  return date ? normalizedSlots.filter(slot => slot.bookingDate === date || slot.date === date) : normalizedSlots;
 }
 
 export async function bookAppointment(payload: {
@@ -76,7 +112,14 @@ export async function bookAppointment(payload: {
   reasonOfAppointment?: string;
 }) {
   const response = await API.post('/user/meetings/book', payload);
-  return response.data?.data ?? response.data;
+  const body = response.data ?? {};
+  return {
+    ...(body.data ?? {}),
+    success: body.success,
+    message: body.message,
+    appointmentId: body.data?.appointmentId ?? body.appointmentId ?? body.id,
+    raw: body,
+  };
 }
 
 export async function getPatientAppointments() {
@@ -105,5 +148,13 @@ export async function getDoctorSlots() {
 
 export async function publishDoctorSlot(bookingDate: string, slotTime: string) {
   const response = await API.post('/doctor/slot/publish', { bookingDate, slotTime });
-  return normalizeSlot(response.data?.data ?? response.data);
+  const slot = response.data?.data ?? response.data;
+  return normalizeSlot(Array.isArray(slot) ? slot[0] : slot);
+}
+
+export async function deleteDoctorSlotsBulk(slotIds: string[]) {
+  const response = await Promise.all(
+    slotIds.map(id => API.delete(`/doctor/slot/${id}`))
+  );
+  return response.map(res => res.data);
 }

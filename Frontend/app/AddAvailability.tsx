@@ -14,7 +14,7 @@ import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getCurrentProfile, getDoctorSlots, publishDoctorSlot, toDateString } from '../services/medirakshaApi';
+import { getCurrentProfile, getDoctorSlots, publishDoctorSlot, deleteDoctorSlotsBulk, toDateString } from '../services/medirakshaApi';
 
 const TIMES = [
     "09:00 - 09:15",
@@ -57,6 +57,8 @@ export default function AddAvailability() {
     const [weeks, setWeeks] = useState('4');
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(true);
+    const [isSelectMode, setIsSelectMode] = useState(false);
+    const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
 
     useEffect(() => {
         fetchInitialData();
@@ -160,6 +162,54 @@ export default function AddAvailability() {
                 },
             },
         ]);
+    };
+
+    const toggleSlotSelection = (slotId: string) => {
+        setSelectedSlotIds(prev =>
+            prev.includes(slotId) ? prev.filter(id => id !== slotId) : [...prev, slotId]
+        );
+    };
+
+    const handleSelectAll = () => {
+        const allAvailableIds = mySlots
+            .filter(slot => slot.status === 'available')
+            .map(slot => getSlotId(slot))
+            .filter(Boolean);
+        setSelectedSlotIds(allAvailableIds);
+    };
+
+    const handleDeselectAll = () => {
+        setSelectedSlotIds([]);
+    };
+
+    const handleBulkDelete = async () => {
+        if (selectedSlotIds.length === 0) return;
+
+        Alert.alert(
+            'Delete Multiple Slots',
+            `Are you sure you want to delete the ${selectedSlotIds.length} selected slots? Patients will no longer see them.`,
+            [
+                { text: 'Keep', style: 'cancel' },
+                {
+                    text: 'Delete Slots',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            await deleteDoctorSlotsBulk(selectedSlotIds);
+                            setSelectedSlotIds([]);
+                            setIsSelectMode(false);
+                            await fetchInitialData();
+                            Alert.alert('Success', 'Selected slots deleted successfully.');
+                        } catch (error: any) {
+                            Alert.alert('Error', error.response?.data?.detail || 'Could not delete slots.');
+                        } finally {
+                            setLoading(false);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const groupedSlots = useMemo(() => {
@@ -309,7 +359,23 @@ export default function AddAvailability() {
 
                 {/* EXISTING SLOTS SECTION */}
                 <View style={[styles.section, { marginTop: 20 }]}>
-                    <Text style={styles.sectionTitle}>Current Availability</Text>
+                    <View style={styles.availabilityHeader}>
+                        <Text style={styles.sectionTitle}>Current Availability</Text>
+                        {groupedSlots.length > 0 && (
+                            <TouchableOpacity
+                                style={styles.manageBtn}
+                                onPress={() => {
+                                    setIsSelectMode(!isSelectMode);
+                                    setSelectedSlotIds([]);
+                                }}
+                            >
+                                <Text style={styles.manageBtnText}>
+                                    {isSelectMode ? 'Cancel' : 'Manage'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
                     <View style={styles.summaryRow}>
                         <View style={styles.summaryPill}>
                             <Text style={styles.summaryValue}>{slotSummary.available}</Text>
@@ -320,6 +386,28 @@ export default function AddAvailability() {
                             <Text style={styles.summaryLabel}>Booked</Text>
                         </View>
                     </View>
+
+                    {isSelectMode && (
+                        <View style={styles.bulkActionBar}>
+                            <View style={styles.bulkActionButtons}>
+                                <TouchableOpacity style={styles.bulkActionBtn} onPress={handleSelectAll}>
+                                    <Ionicons name="checkbox-outline" size={16} color="#1A237E" />
+                                    <Text style={styles.bulkActionBtnText}>Select All</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.bulkActionBtn} onPress={handleDeselectAll}>
+                                    <Ionicons name="close-circle-outline" size={16} color="#1A237E" />
+                                    <Text style={styles.bulkActionBtnText}>Deselect All</Text>
+                                </TouchableOpacity>
+                            </View>
+                            {selectedSlotIds.length > 0 && (
+                                <TouchableOpacity style={styles.bulkDeleteBtn} onPress={handleBulkDelete}>
+                                    <Ionicons name="trash-outline" size={16} color="#fff" />
+                                    <Text style={styles.bulkDeleteBtnText}>Delete Selected ({selectedSlotIds.length})</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
+
                     {groupedSlots.length === 0 ? (
                         <Text style={styles.emptyText}>No slots published yet.</Text>
                     ) : (
@@ -327,16 +415,43 @@ export default function AddAvailability() {
                             <View key={d} style={styles.slotGroup}>
                                 <Text style={styles.slotDate}>{new Date(d).toDateString()}</Text>
                                 <View style={styles.badgeContainer}>
-                                    {slots.map((slot: any, idx) => (
-                                        <TouchableOpacity
-                                            key={getSlotId(slot) || idx}
-                                            style={styles.badge}
-                                            onPress={() => getSlotId(slot) && cancelSlot(getSlotId(slot))}
-                                        >
-                                            <Text style={styles.badgeText}>{formatSlotLabel(slot)}</Text>
-                                            <Ionicons name="close" size={12} color="#1A237E" />
-                                        </TouchableOpacity>
-                                    ))}
+                                    {slots.map((slot: any, idx) => {
+                                        const slotId = getSlotId(slot);
+                                        const isSelected = selectedSlotIds.includes(slotId);
+                                        return (
+                                            <TouchableOpacity
+                                                key={slotId || idx}
+                                                style={[
+                                                    styles.badge,
+                                                    isSelectMode && isSelected && styles.selectedBadge
+                                                ]}
+                                                onPress={() => {
+                                                    if (!slotId) return;
+                                                    if (isSelectMode) {
+                                                        toggleSlotSelection(slotId);
+                                                    } else {
+                                                        cancelSlot(slotId);
+                                                    }
+                                                }}
+                                            >
+                                                <Text style={[
+                                                    styles.badgeText,
+                                                    isSelectMode && isSelected && styles.selectedBadgeText
+                                                ]}>
+                                                    {formatSlotLabel(slot)}
+                                                </Text>
+                                                {isSelectMode ? (
+                                                    isSelected ? (
+                                                        <Ionicons name="checkmark-circle" size={12} color="#DC2626" />
+                                                    ) : (
+                                                        <Ionicons name="ellipse-outline" size={12} color="#1A237E" />
+                                                    )
+                                                ) : (
+                                                    <Ionicons name="close" size={12} color="#1A237E" />
+                                                )}
+                                            </TouchableOpacity>
+                                        );
+                                    })}
                                 </View>
                             </View>
                         ))
@@ -457,4 +572,76 @@ const styles = StyleSheet.create({
     },
     badgeText: { fontSize: 12, color: '#1A237E', fontWeight: '600' },
     emptyText: { textAlign: 'center', color: '#64748B', marginTop: 10, fontStyle: 'italic' },
+    availabilityHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 15,
+    },
+    manageBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+        backgroundColor: '#F1F5F9',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    manageBtnText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#1A237E',
+    },
+    bulkActionBar: {
+        backgroundColor: '#F8FAFC',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        gap: 12,
+    },
+    bulkActionButtons: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    bulkActionBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        paddingVertical: 8,
+        borderRadius: 8,
+        gap: 6,
+    },
+    bulkActionBtnText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#1A237E',
+    },
+    bulkDeleteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#EF4444',
+        paddingVertical: 10,
+        borderRadius: 8,
+        gap: 8,
+    },
+    bulkDeleteBtnText: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: '#fff',
+    },
+    selectedBadge: {
+        backgroundColor: '#FEE2E2',
+        borderColor: '#EF4444',
+        borderWidth: 1,
+    },
+    selectedBadgeText: {
+        color: '#DC2626',
+    },
 });

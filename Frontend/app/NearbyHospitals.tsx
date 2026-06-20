@@ -43,9 +43,32 @@ type LocationSuggestion = {
   label: string;
   latitude: number;
   longitude: number;
+  kind: 'hospital' | 'location';
+  address?: string;
+};
+
+const normalizeSearchText = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const isRelevantSuggestion = (query: string, label: string) => {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedLabel = normalizeSearchText(label);
+  const queryTokens = normalizedQuery.split(' ').filter(token => token.length > 1);
+
+  return normalizedLabel.includes(normalizedQuery) ||
+    (queryTokens.length > 0 && queryTokens.every(token => normalizedLabel.includes(token)));
+};
+
+const isHospitalResult = (item: any) => {
+  const categories = Array.isArray(item.categories) ? item.categories : [];
+  return categories.some((category: string) => category.startsWith('healthcare.hospital')) ||
+    item.class === 'amenity' && item.type === 'hospital' ||
+    item.addresstype === 'hospital';
 };
 
 const fetchLocationSuggestions = async (query: string, limit = 6): Promise<LocationSuggestion[]> => {
+  const suggestions: LocationSuggestion[] = [];
+
   if (PLACES_KEY) {
     try {
       const url =
@@ -56,35 +79,65 @@ const fetchLocationSuggestions = async (query: string, limit = 6): Promise<Locat
       const response = await fetch(url);
       if (!response.ok) throw new Error('Geoapify autocomplete failed');
       const data = await response.json();
-      return (data.results || []).map((item: any) => ({
+      suggestions.push(...(data.results || []).map((item: any) => ({
         id: item.place_id || `${item.lat}-${item.lon}`,
         label: item.formatted || item.address_line2 || item.address_line1,
         latitude: Number(item.lat),
         longitude: Number(item.lon),
+        kind: isHospitalResult(item) ? 'hospital' as const : 'location' as const,
+        address: item.formatted || item.address_line2 || item.address_line1,
       })).filter((item: LocationSuggestion) =>
-        item.label && Number.isFinite(item.latitude) && Number.isFinite(item.longitude)
-      );
+        item.label && Number.isFinite(item.latitude) && Number.isFinite(item.longitude) &&
+        isRelevantSuggestion(query, item.label)
+      ));
     } catch (error) {
       console.warn('Geoapify autocomplete unavailable, using fallback:', error);
     }
   }
 
-  const fallbackUrl =
-    `https://nominatim.openstreetmap.org/search` +
-    `?q=${encodeURIComponent(query)}&format=jsonv2&addressdetails=1&limit=${limit}`;
-  const response = await fetch(fallbackUrl, {
-    headers: { 'User-Agent': 'MediRaksha/1.0 location-search' },
-  });
-  if (!response.ok) throw new Error('Location search failed');
-  const data = await response.json();
-  return (data || []).map((item: any) => ({
-    id: String(item.place_id || `${item.lat}-${item.lon}`),
-    label: item.display_name,
-    latitude: Number(item.lat),
-    longitude: Number(item.lon),
-  })).filter((item: LocationSuggestion) =>
-    item.label && Number.isFinite(item.latitude) && Number.isFinite(item.longitude)
-  );
+  try {
+    const osmUrl =
+      `https://nominatim.openstreetmap.org/search` +
+      `?q=${encodeURIComponent(query)}&format=jsonv2&addressdetails=1&limit=${limit}`;
+    const response = await fetch(osmUrl, {
+      headers: { 'User-Agent': 'MediRaksha/1.0 location-search' },
+    });
+    if (!response.ok) throw new Error('Location search failed');
+    const data = await response.json();
+    suggestions.push(...(data || []).map((item: any) => ({
+      id: String(item.place_id || `${item.lat}-${item.lon}`),
+      label: item.display_name,
+      latitude: Number(item.lat),
+      longitude: Number(item.lon),
+      kind: isHospitalResult(item) ? 'hospital' as const : 'location' as const,
+      address: item.display_name,
+    })).filter((item: LocationSuggestion) =>
+      item.label && Number.isFinite(item.latitude) && Number.isFinite(item.longitude) &&
+      isRelevantSuggestion(query, item.label)
+    ));
+  } catch (error) {
+    console.warn('OpenStreetMap autocomplete unavailable:', error);
+  }
+
+  const hospitalIntent = normalizeSearchText(query).includes('hospital');
+  return suggestions
+    .filter((item, index, items) =>
+      items.findIndex(candidate =>
+        candidate.kind === item.kind &&
+        normalizeSearchText(candidate.label) === normalizeSearchText(item.label)
+      ) === index
+    )
+    .sort((a, b) => {
+      const queryText = normalizeSearchText(query);
+      const aText = normalizeSearchText(a.label);
+      const bText = normalizeSearchText(b.label);
+      const aScore = aText === queryText ? 0 : aText.startsWith(queryText) ? 1 : 2;
+      const bScore = bText === queryText ? 0 : bText.startsWith(queryText) ? 1 : 2;
+      if (aScore !== bScore) return aScore - bScore;
+      if (hospitalIntent && a.kind !== b.kind) return a.kind === 'hospital' ? -1 : 1;
+      return 0;
+    })
+    .slice(0, limit);
 };
 
 const inferSpeciality = (name: string) => {
@@ -103,6 +156,7 @@ export default function NearbyHospitals() {
   const router = useRouter();
   const { specialty, useProfileLocation } = useLocalSearchParams();
   const [location, setLocation] = useState<Location.LocationObjectCoords | null>(null);
+  const [deviceLocation, setDeviceLocation] = useState<Location.LocationObjectCoords | null>(null);
   const [profile, setProfile] = useState<any>(null);
   const [hospitals, setHospitals] = useState<Hospital[]>([]);
   const [filteredHospitals, setFilteredHospitals] = useState<Hospital[]>([]);
@@ -114,6 +168,7 @@ export default function NearbyHospitals() {
   const [searchingLocation, setSearchingLocation] = useState(false);
   const [searchRadius, setSearchRadius] = useState(5000); // 5km default
   const suppressAutocomplete = useRef(false);
+  const autocompleteRequest = useRef(0);
 
   const haversineMeters = (
     lat1: number, lon1: number,
@@ -282,8 +337,7 @@ export default function NearbyHospitals() {
     });
 
     setLocation(userLocation.coords);
-    suppressAutocomplete.current = true;
-    setLocationQuery('Current location');
+    setDeviceLocation(userLocation.coords);
     await fetchHospitals(
       userLocation.coords.latitude,
       userLocation.coords.longitude,
@@ -302,16 +356,23 @@ export default function NearbyHospitals() {
       return;
     }
     if (query.length < 3 || query === 'Current location') {
+      autocompleteRequest.current += 1;
       setLocationSuggestions([]);
       return;
     }
 
+    const requestId = ++autocompleteRequest.current;
     const timer = setTimeout(async () => {
       try {
-        setLocationSuggestions(await fetchLocationSuggestions(query));
+        const suggestions = await fetchLocationSuggestions(query);
+        if (requestId === autocompleteRequest.current) {
+          setLocationSuggestions(suggestions);
+        }
       } catch (error) {
         console.warn('Location autocomplete error:', error);
-        setLocationSuggestions([]);
+        if (requestId === autocompleteRequest.current) {
+          setLocationSuggestions([]);
+        }
       }
     }, 700);
 
@@ -350,11 +411,56 @@ export default function NearbyHospitals() {
     await fetchHospitals(coords.latitude, coords.longitude, searchRadius);
   };
 
+  const openHospitalSuggestion = (suggestion: LocationSuggestion) => {
+    const referenceLocation = deviceLocation || location || {
+      latitude: suggestion.latitude,
+      longitude: suggestion.longitude,
+    };
+    const name = suggestion.label.split(',')[0].trim();
+    const hospital: Hospital = {
+      id: suggestion.id,
+      name,
+      latitude: suggestion.latitude,
+      longitude: suggestion.longitude,
+      speciality: inferSpeciality(name),
+      address: suggestion.address || suggestion.label,
+      emergency: false,
+      distance: haversineMeters(
+        referenceLocation.latitude,
+        referenceLocation.longitude,
+        suggestion.latitude,
+        suggestion.longitude
+      ),
+    };
+
+    setLocationSuggestions([]);
+    handleHospitalPress(hospital);
+  };
+
+  const selectSuggestion = async (suggestion: LocationSuggestion) => {
+    if (suggestion.kind === 'hospital') {
+      openHospitalSuggestion(suggestion);
+      return;
+    }
+    await selectLocation(suggestion);
+  };
+
+  const clearSearch = async () => {
+    suppressAutocomplete.current = true;
+    setLocationQuery('');
+    setLocationSuggestions([]);
+    if (deviceLocation) {
+      setLocation(deviceLocation);
+      setLoading(true);
+      await fetchHospitals(deviceLocation.latitude, deviceLocation.longitude, searchRadius);
+    }
+  };
+
   const searchTypedLocation = async () => {
     const query = locationQuery.trim();
     if (!query) return;
     if (locationSuggestions.length > 0) {
-      await selectLocation(locationSuggestions[0]);
+      await selectSuggestion(locationSuggestions[0]);
       return;
     }
     setSearchingLocation(true);
@@ -364,7 +470,7 @@ export default function NearbyHospitals() {
         Alert.alert('Location Not Found', 'Try entering a more specific city, area, landmark, or address.');
         return;
       }
-      await selectLocation(item);
+      await selectSuggestion(item);
     } catch (error) {
       console.error('Location search error:', error);
       Alert.alert('Location Search Failed', 'Unable to find that location. Please try again.');
@@ -434,7 +540,7 @@ export default function NearbyHospitals() {
         <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search city, area, landmark, or address..."
+          placeholder="Search a hospital or location..."
           value={locationQuery}
           onChangeText={setLocationQuery}
           onSubmitEditing={searchTypedLocation}
@@ -444,10 +550,7 @@ export default function NearbyHospitals() {
         {searchingLocation ? (
           <ActivityIndicator size="small" color="#1A237E" />
         ) : locationQuery.length > 0 ? (
-          <TouchableOpacity onPress={() => {
-            setLocationQuery('');
-            setLocationSuggestions([]);
-          }}>
+          <TouchableOpacity onPress={clearSearch}>
             <Ionicons name="close-circle" size={20} color="#666" />
           </TouchableOpacity>
         ) : null}
@@ -458,10 +561,19 @@ export default function NearbyHospitals() {
             <TouchableOpacity
               key={suggestion.id}
               style={styles.suggestionRow}
-              onPress={() => selectLocation(suggestion)}
+              onPress={() => selectSuggestion(suggestion)}
             >
-              <Ionicons name="location-outline" size={18} color="#1A237E" />
-              <Text style={styles.suggestionText} numberOfLines={2}>{suggestion.label}</Text>
+              <FontAwesome5
+                name={suggestion.kind === 'hospital' ? 'hospital' : 'map-marker-alt'}
+                size={16}
+                color="#1A237E"
+              />
+              <View style={styles.suggestionContent}>
+                <Text style={styles.suggestionType}>
+                  {suggestion.kind === 'hospital' ? 'Hospital' : 'Location'}
+                </Text>
+                <Text style={styles.suggestionText} numberOfLines={2}>{suggestion.label}</Text>
+              </View>
             </TouchableOpacity>
           ))}
         </View>
@@ -681,10 +793,20 @@ const styles = StyleSheet.create({
   },
   suggestionText: {
     flex: 1,
-    marginLeft: 10,
     color: '#334155',
     fontSize: 14,
     lineHeight: 19,
+  },
+  suggestionContent: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  suggestionType: {
+    color: '#1A237E',
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 2,
+    textTransform: 'uppercase',
   },
   radiusContainer: {
     flexDirection: 'row',

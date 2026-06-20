@@ -340,7 +340,7 @@ export default function HospitalDetails() {
               style={styles.doctorItem}
               onPress={() => router.push({
                 pathname: '/BookAppointment',
-                params: { doctorId: dr.id, doctorName: dr.name, specialty: dr.specialty, hospitalName: hospital.name }
+                params: { doctorId: dr.id, doctorName: dr.name, specialty: dr.specialty, hospitalName: hospital.name, directSlot: 'true' }
               })}
             >
               <View style={styles.drIcon}>

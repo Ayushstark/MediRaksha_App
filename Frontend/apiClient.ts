@@ -26,6 +26,12 @@ apiClient.interceptors.response.use(
     async (error) => {
         if (error.message === 'Network Error' || error.code === 'ECONNABORTED') {
             const config = error.config || {};
+            const method = String(config.method || 'get').toLowerCase();
+            const canRetryOnAnotherBackend = ['get', 'head', 'options'].includes(method);
+            if (!canRetryOnAnotherBackend) {
+                return Promise.reject(error);
+            }
+
             const retryConfig = config as typeof config & { __attemptedBaseUrls?: string[] };
             const attemptedUrls: string[] = retryConfig.__attemptedBaseUrls || [config.baseURL || String(apiClient.defaults.baseURL)];
             const nextBaseUrl = BACKEND_URLS.find((url) => !attemptedUrls.includes(url));

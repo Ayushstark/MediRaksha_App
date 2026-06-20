@@ -67,10 +67,21 @@ export default function DoctorList() {
         setFilteredDoctors(filtered);
     }, [searchQuery, selectedSpecialty, doctors]);
 
+    const openDoctorBooking = (doctor: any) => {
+        router.push({
+            pathname: '/BookAppointment',
+            params: {
+                doctorId: doctor.id || doctor._id,
+                doctorName: doctor.name,
+                directSlot: 'true',
+            },
+        });
+    };
+
     const renderDoctorCard = ({ item }: { item: Doctor }) => (
         <TouchableOpacity
             style={styles.card}
-            onPress={() => router.push({ pathname: '/BookAppointment', params: { doctorId: item._id } })}
+            onPress={() => openDoctorBooking(item)}
         >
             <View style={styles.cardContent}>
                 <View style={styles.avatarContainer}>
@@ -95,7 +106,7 @@ export default function DoctorList() {
                 </View>
                 <TouchableOpacity
                     style={styles.bookButton}
-                    onPress={() => router.push({ pathname: '/BookAppointment', params: { doctorId: item._id } })}
+                    onPress={() => openDoctorBooking(item)}
                 >
                     <Text style={styles.bookButtonText}>Book</Text>
                 </TouchableOpacity>

@@ -56,7 +56,7 @@ export default function PatientDashboard() {
       }
 
       setTip('Stay hydrated and get enough sleep 🌱');
-      const activityRes = await API.get('/activities');
+      const activityRes = await API.get('/activities').catch(() => ({ data: { data: [] } }));
       const activityRows = activityRes.data?.data ?? [];
       setActivities(Array.isArray(activityRows) ? activityRows.map((item: any) => item.description) : []);
 
@@ -134,11 +134,11 @@ export default function PatientDashboard() {
 
       if (modalType === 'appointments') {
         setModalVisible(false);
-        router.push('/BookAppointment');
+        router.push({ pathname: '/BookAppointment', params: { skipDiscovery: 'true' } });
         return;
       }
 
-      const response = await API.post('/activities', { description: inputText });
+      const response = await API.post('/activities', { description: inputText }).catch(() => ({ data: { description: inputText } }));
       setActivities(prev => [response.data.description, ...prev]);
 
       setInputText('');
@@ -177,7 +177,7 @@ export default function PatientDashboard() {
         <View style={styles.quickActions}>
           <TouchableOpacity
             style={styles.bookNowCard}
-            onPress={() => router.push('/BookAppointment')}
+            onPress={() => router.push({ pathname: '/BookAppointment', params: { skipDiscovery: 'true' } })}
           >
             <View style={styles.bookNowLeft}>
               <View style={styles.aiBadge}>
@@ -219,7 +219,7 @@ export default function PatientDashboard() {
               size={18}
               color="#1A237E"
               onPress={() => {
-                router.push('/BookAppointment');
+                router.push({ pathname: '/BookAppointment', params: { skipDiscovery: 'true' } });
               }}
             />
           </TouchableOpacity>

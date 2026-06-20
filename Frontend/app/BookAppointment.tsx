@@ -10,17 +10,22 @@ import {
     Platform,
     Modal,
     ActivityIndicator,
-    Image,
-    FlatList,
     KeyboardAvoidingView,
 } from 'react-native';
-import { Ionicons, FontAwesome5, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import API from '../apiClient';
+import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Animated, { FadeInUp, ZoomIn, SlideInRight } from 'react-native-reanimated';
 import { classifySymptom } from '../services/huggingFaceService';
-import { bookAppointment, getAvailableSlots, getDoctors, toDateString } from '../services/medirakshaApi';
+import API from '../apiClient';
+import {
+    bookAppointment,
+    getAvailableSlots,
+    getDoctors,
+    normalizeSpeciality,
+    toDateString,
+} from '../services/medirakshaApi';
 
 const SPECIALTIES = [
     { id: '1', name: 'General Physician', icon: 'stethoscope' },
@@ -31,13 +36,6 @@ const SPECIALTIES = [
     { id: '6', name: 'Neurologist', icon: 'brain' },
 ];
 
-const normalizeSpeciality = (value: any) => {
-    const normalized = String(value || "").trim().toLowerCase();
-    if (!normalized || normalized === "general") return "General Physician";
-    if (normalized === "general medicine") return "General Physician";
-    return String(value).trim();
-};
-
 const DOCTORS_FALLBACK = [
     { id: 'd1', name: 'Dr. Sarah Wilson', specialty: 'General Physician', rating: 4.8, exp: '10 yrs', fee: '500' },
 ];
@@ -45,6 +43,8 @@ const DOCTORS_FALLBACK = [
 export default function BookAppointment() {
     const router = useRouter();
     const params = useLocalSearchParams();
+    const { doctorId, doctorName } = params;
+    const hasDirectDoctor = Boolean(doctorId || doctorName);
 
     // --- STEP STATE ---
     const [step, setStep] = useState(1);
@@ -65,14 +65,12 @@ export default function BookAppointment() {
     const [selectedTimeSlot, setSelectedTimeSlot] = useState<any>(null);
     const [reason, setReason] = useState('');
     const [patientInfo, setPatientInfo] = useState({ name: '', age: '', gender: 'Male', phone: '' });
-    const [paymentMethod, setPaymentMethod] = useState('Clinic');
+    const [selectedReport, setSelectedReport] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
 
     // --- LOGIC STATES ---
     const [loading, setLoading] = useState(false);
     const [showSuccess, setShowSuccess] = useState(false);
     const [aiMatching, setAiMatching] = useState(false);
-
-    const { doctorId, doctorName, specialty: paramSpecialty, hospitalName: paramHospitalName } = params;
 
     // 1. Fetch Doctors on Mount
     useEffect(() => {
@@ -86,7 +84,7 @@ export default function BookAppointment() {
                     return {
                         id: doc.id,
                         name: doc.name,
-                        specialty: normalizeSpeciality(doc.specialization),
+                        specialty: normalizeSpeciality(doc.speciality ?? doc.specialization ?? doc.specialty),
                         hospitalName: doc.hospital || "MediRaksha Clinic",
                         rating: doc.rating || (4.5 + (Math.random() * 0.5)),
                         exp: doc.experience || '10+ yrs',
@@ -110,8 +108,9 @@ export default function BookAppointment() {
         if (!specialtyStr || specialtyStr === 'All') {
             setDoctorList(allDoctors);
         } else {
+            const normalizedSpecialty = normalizeSpeciality(specialtyStr);
             const filtered = allDoctors.filter(d =>
-                d.specialty.toLowerCase() === specialtyStr.toLowerCase()
+                normalizeSpeciality(d.specialty).toLowerCase() === normalizedSpecialty.toLowerCase()
             );
             setDoctorList(filtered);
         }
@@ -119,21 +118,21 @@ export default function BookAppointment() {
 
     // 3. Handle External Param (from DoctorDetails)
     useEffect(() => {
-        if ((doctorId || doctorName) && step === 1) {
+        if (doctorId || doctorName) {
             const found = allDoctors.find(d =>
-                (doctorId && d.id === doctorId) || (doctorName && d.name === doctorName)
+                (doctorId && String(d.id) === String(doctorId)) ||
+                (doctorName && String(d.name).toLowerCase() === String(doctorName).toLowerCase())
             );
             if (found) {
                 setSelectedDoctor(found);
                 setSelectedSpecialty(found.specialty);
-                setStep(3);
             }
         }
-    }, [doctorId, doctorName, allDoctors, step]);
+    }, [doctorId, doctorName, allDoctors]);
 
     // 4. Load Slots when Doctor/Date changes
     useEffect(() => {
-        if (selectedDoctor && selectedDate && step === 4) {
+        if (selectedDoctor && selectedDate && step === 2) {
             setSlots([]); // Clear slots on date change
             setSelectedTimeSlot(null);
         }
@@ -197,8 +196,48 @@ export default function BookAppointment() {
     };
 
     // --- HANDLERS ---
-    const handleNextStep = () => setStep(step + 1);
-    const handlePrevStep = () => setStep(step - 1);
+    const handleNextStep = () => setStep(prev => Math.min(prev + 1, 3));
+    const handlePrevStep = () => {
+        if (step <= 1) {
+            router.back();
+            return;
+        }
+        setStep(prev => Math.max(prev - 1, 1));
+    };
+
+    const pickRecentReport = async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['application/pdf', 'image/*'],
+                copyToCacheDirectory: true,
+            });
+            if (result.canceled || !result.assets?.[0]) return;
+            setSelectedReport(result.assets[0]);
+        } catch (error) {
+            console.error('Report picker error:', error);
+            Alert.alert('Upload Error', 'Could not select the report file.');
+        }
+    };
+
+    const uploadSelectedReport = async () => {
+        if (!selectedReport || !selectedDoctor?.id) return;
+
+        const formData = new FormData();
+        formData.append('file', {
+            uri: Platform.OS === 'ios' ? selectedReport.uri.replace('file://', '') : selectedReport.uri,
+            name: selectedReport.name || `report_${Date.now()}.pdf`,
+            type: selectedReport.mimeType || 'application/pdf',
+        } as any);
+        formData.append('title', selectedReport.name?.replace(/\.[^/.]+$/, '') || 'Recent Medical Report');
+        formData.append('category', 'other');
+        formData.append('visibility', 'doctor');
+        formData.append('doctorId', String(selectedDoctor.id));
+        formData.append('uploadedBy', 'user');
+
+        await API.post('/user/report/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+    };
 
     const handleAiMatch = async () => {
         if (!reason.trim()) {
@@ -227,12 +266,12 @@ export default function BookAppointment() {
             Alert.alert('Selection Required', 'Please pick a time slot first.');
             return;
         }
-        if (!patientInfo.name.trim()) {
-            Alert.alert('Required', 'Please enter your name before confirming.');
+        if (!reason.trim()) {
+            Alert.alert('Required', 'Please enter the reason for your visit.');
             return;
         }
 
-        const dateStr = toDateString(selectedDate);
+        const dateStr = selectedTimeSlot.bookingDate || selectedTimeSlot.date || toDateString(selectedDate);
 
         setLoading(true);
         try {
@@ -240,20 +279,31 @@ export default function BookAppointment() {
                 throw new Error('Please select a server-published slot.');
             }
 
+            if (selectedReport) {
+                await uploadSelectedReport();
+            }
+
             const response = await bookAppointment({
                 doctorId: selectedDoctor?.id,
                 slotId: selectedTimeSlot.id || selectedTimeSlot._id,
                 appointmentDate: dateStr,
-                reasonOfAppointment: reason || 'Mobile App Booking',
+                reasonOfAppointment: reason.trim(),
             });
-            if (!response?.appointmentId) {
-                throw new Error('Appointment confirmation was not returned by the server.');
+            if (response?.success === false || !response?.appointmentId) {
+                throw new Error(response?.message || 'Appointment confirmation was not returned by the server.');
             }
             console.log('[BookAppointment] Booking API success');
+            setSlots(prev => prev.filter(slot => (slot.id || slot._id) !== (selectedTimeSlot.id || selectedTimeSlot._id)));
             setShowSuccess(true);
         } catch (error: any) {
             console.error('Booking Logic Error:', error);
-            Alert.alert('Booking Failed', error.response?.data?.detail || error.message || 'Could not confirm this appointment.');
+            Alert.alert(
+                'Booking Failed',
+                error.response?.data?.message ||
+                error.response?.data?.detail ||
+                error.message ||
+                'Could not confirm this appointment.'
+            );
         } finally {
             setLoading(false);
         }
@@ -268,7 +318,7 @@ export default function BookAppointment() {
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
                 <Text style={styles.headerTitle}>Book Appointment</Text>
-                <Text style={styles.stepIndicator}>Step {step} of 5</Text>
+                <Text style={styles.stepIndicator}>Step {step} of 3</Text>
             </View>
             <View style={{ width: 24 }} />
         </View>
@@ -375,7 +425,19 @@ export default function BookAppointment() {
 
     const renderStep3 = () => (
         <View style={styles.stepContainer}>
-            <Text style={styles.label}>3. Appointment Type</Text>
+            <Text style={styles.label}>1. Appointment Type</Text>
+            {!hasDirectDoctor && (
+                <Text style={styles.subtext}>Please choose a doctor from the doctor list before booking.</Text>
+            )}
+            {selectedDoctor && (
+                <View style={styles.selectedDoctorBox}>
+                    <FontAwesome5 name="user-md" size={18} color="#1A237E" />
+                    <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={styles.selectedDoctorName}>Dr. {selectedDoctor.name}</Text>
+                        <Text style={styles.subtext}>{selectedDoctor.specialty} • {selectedDoctor.hospitalName}</Text>
+                    </View>
+                </View>
+            )}
             <View style={styles.typeRow}>
                 {['In-Person', 'Tele-Consult'].map(t => (
                     <TouchableOpacity
@@ -388,7 +450,11 @@ export default function BookAppointment() {
                     </TouchableOpacity>
                 ))}
             </View>
-            <TouchableOpacity style={styles.nextBtn} onPress={handleNextStep}>
+            <TouchableOpacity
+                style={[styles.nextBtn, !selectedDoctor && { backgroundColor: '#CBD5E1' }]}
+                onPress={handleNextStep}
+                disabled={!selectedDoctor}
+            >
                 <Text style={styles.nextBtnText}>Select Slot</Text>
             </TouchableOpacity>
         </View>
@@ -396,7 +462,7 @@ export default function BookAppointment() {
 
     const renderStep4 = () => (
         <View style={styles.stepContainer}>
-            <Text style={styles.label}>4. Pick Date & Time</Text>
+            <Text style={styles.label}>2. Pick Date & Time</Text>
             <TouchableOpacity style={styles.datePickerBtn} onPress={() => setShowDatePicker(true)}>
                 <Ionicons name="calendar" size={20} color="#1A237E" />
                 <Text style={styles.dateText}>{selectedDate.toDateString()}</Text>
@@ -445,7 +511,7 @@ export default function BookAppointment() {
             </View>
             {selectedTimeSlot && (
                 <TouchableOpacity style={styles.nextBtn} onPress={handleNextStep}>
-                    <Text style={styles.nextBtnText}>Enter Patient Details</Text>
+                    <Text style={styles.nextBtnText}>Review & Confirm</Text>
                 </TouchableOpacity>
             )}
         </View>
@@ -453,42 +519,36 @@ export default function BookAppointment() {
 
     const renderStep5 = () => (
         <View style={styles.stepContainer}>
-            <Text style={styles.label}>5. Patient Details</Text>
-            <TextInput
-                style={styles.input}
-                placeholder="Patient Full Name"
-                value={patientInfo.name}
-                onChangeText={(v) => setPatientInfo({ ...patientInfo, name: v })}
-            />
-            <TextInput
-                style={styles.input}
-                placeholder="Phone Number"
-                keyboardType="phone-pad"
-                value={patientInfo.phone}
-                onChangeText={(v) => setPatientInfo({ ...patientInfo, phone: v })}
-            />
-            <TextInput
-                style={styles.input}
-                placeholder="Age"
-                keyboardType="numeric"
-                value={patientInfo.age}
-                onChangeText={(v) => setPatientInfo({ ...patientInfo, age: v })}
-            />
-            
-            <View style={styles.genderRowContainer}>
-                <Text style={styles.genderLabel}>Gender</Text>
-                <View style={styles.genderRow}>
-                    {['Male', 'Female', 'Other'].map(g => (
-                        <TouchableOpacity
-                            key={g}
-                            style={[styles.genderBtn, patientInfo.gender === g && styles.activeGender]}
-                            onPress={() => setPatientInfo({ ...patientInfo, gender: g })}
-                        >
-                            <Text style={[styles.genderText, patientInfo.gender === g && styles.activeText]}>{g}</Text>
-                        </TouchableOpacity>
-                    ))}
-                </View>
+            <Text style={styles.label}>3. Confirm Visit</Text>
+            <View style={styles.confirmSummary}>
+                <Text style={styles.summaryLine}>Doctor: Dr. {selectedDoctor?.name}</Text>
+                <Text style={styles.summaryLine}>Type: {consultType}</Text>
+                <Text style={styles.summaryLine}>Date: {selectedTimeSlot?.bookingDate || selectedTimeSlot?.date || toDateString(selectedDate)}</Text>
+                <Text style={styles.summaryLine}>Time: {selectedTimeSlot?.time}</Text>
             </View>
+            <TextInput
+                style={[styles.input, styles.reasonInput]}
+                placeholder="Reason for visit"
+                value={reason}
+                onChangeText={setReason}
+                multiline
+                textAlignVertical="top"
+            />
+
+            <TouchableOpacity style={styles.reportButton} onPress={pickRecentReport}>
+                <Ionicons name="document-attach-outline" size={20} color="#1A237E" />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                    <Text style={styles.reportButtonText}>
+                        {selectedReport ? selectedReport.name : 'Optional: Upload recent report'}
+                    </Text>
+                    <Text style={styles.subtext}>PDF or image, shared with this doctor</Text>
+                </View>
+                {selectedReport && (
+                    <TouchableOpacity onPress={() => setSelectedReport(null)}>
+                        <Ionicons name="close-circle" size={20} color="#EF4444" />
+                    </TouchableOpacity>
+                )}
+            </TouchableOpacity>
 
             <TouchableOpacity style={styles.confirmBtn} onPress={handleBooking} disabled={loading}>
                 {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmBtnText}>Confirm Appointment</Text>}
@@ -503,11 +563,9 @@ export default function BookAppointment() {
         >
             {renderHeader()}
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                {step === 1 && renderStep1()}
-                {step === 2 && renderStep2()}
-                {step === 3 && renderStep3()}
-                {step === 4 && renderStep4()}
-                {step === 5 && renderStep5()}
+                {step === 1 && renderStep3()}
+                {step === 2 && renderStep4()}
+                {step === 3 && renderStep5()}
             </ScrollView>
 
             {/* SUCCESS MODAL */}

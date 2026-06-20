@@ -30,7 +30,62 @@ const q = (text, params) => pool.query(text, params);
 const data = (value) => ({ data: value });
 const id = (row) => String(row.id);
 const apiError = (res, status, message) => res.status(status).json({ detail: message, message, msg: message });
+const dateOnly = (value) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value || '').slice(0, 10);
 const roleName = (role) => role === 'doctor' ? 'Doctor' : 'Patient';
+const quoteId = (value) => {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+};
+const asTime = (value) => String(value || '').slice(0, 5);
+const webUserDto = (row) => ({
+  id: id(row), _id: id(row), name: row.name, email: row.email, number: row.number,
+  phoneNumber: row.number, age: row.age, gender: row.gender, role: 'Patient',
+  registeredDoctorId: row.registeredDoctorId ? String(row.registeredDoctorId) : undefined,
+  createdAt: row.createdAt,
+});
+const webDoctorDto = (row) => ({
+  id: id(row), _id: id(row), doctorId: id(row), name: row.name, email: row.email,
+  number: row.number, phoneNumber: row.number, age: row.age, gender: row.gender,
+  role: 'Doctor', hospital: row.hospital, speciality: row.speciality,
+  specialization: row.speciality, createdAt: row.createdAt,
+});
+const webSlotDto = (row) => ({
+  id: id(row), _id: id(row), doctorId: String(row.doctorId),
+  bookingDate: dateOnly(row.bookingDate), date: dateOnly(row.bookingDate),
+  slotTime: asTime(row.slotTime), time: asTime(row.slotTime), status: row.status,
+});
+const webAppointmentDto = (row) => ({
+  id: id(row), _id: id(row), Id: id(row), patientId: String(row.userId),
+  doctorId: String(row.doctorId), slotId: String(row.slotId),
+  appointmentDate: dateOnly(row.appointmentDate), slotTime: asTime(row.slotTime),
+  doctorName: row.doctorName, speciality: row.speciality, hospitalName: row.hospital,
+  patientName: row.patientName, patientContact: row.patientContact,
+  patientAge: row.patientAge, patientGender: row.patientGender, patientEmail: row.patientEmail,
+  reasonOfAppointment: row.reasonOfAppointment, reason: row.reasonOfAppointment,
+  status: row.status, createdAt: row.createdAt,
+  patient: {
+    id: row.userId ? String(row.userId) : undefined, name: row.patientName,
+    age: row.patientAge, gender: row.patientGender, email: row.patientEmail,
+    phoneNumber: row.patientContact,
+  },
+});
+const webReportDto = (row, includeFile = false) => ({
+  id: id(row), _id: id(row), reportId: id(row), userId: String(row.userId),
+  patientId: String(row.userId), title: row.title, category: row.category,
+  visibility: row.visibility === 'doctor' ? 'shared' : row.visibility,
+  originalFileName: row.originalFileName, fileName: row.originalFileName,
+  mimeType: row.mimeType, fileSize: Number(row.fileSize || 0),
+  uploadedBy: row.uploadedBy, createdAt: row.createdAt, updatedAt: row.updatedAt,
+  ...(includeFile ? { fileData: row.fileData } : {}),
+});
+const webHospitalDto = (row) => ({
+  id: id(row), _id: id(row), name: row.name,
+  bed: Number(row.bed || 0), room: Number(row.room || 0),
+  oxygenCylinder: Number(row.oxygenCylinder || 0),
+  availableBeds: Number(row.bed || 0), address: row.address, latitude: row.latitude,
+  longitude: row.longitude, geoapifyPlaceId: row.geoapifyPlaceId, place_id: row.geoapifyPlaceId,
+  updatedAt: row.updatedAt || row.createdAt,
+});
 const userDto = (row) => ({
   id: id(row), _id: id(row), name: row.name, email: row.email, number: row.phone,
   phoneNumber: row.phone, age: row.age, gender: row.gender, role: roleName(row.role),
@@ -38,8 +93,8 @@ const userDto = (row) => ({
   doctorId: row.role === 'doctor' ? id(row) : undefined, createdAt: row.created_at,
 });
 const slotDto = (row) => ({
-  id: id(row), _id: id(row), doctorId: String(row.doctor_id), bookingDate: row.booking_date,
-  date: row.booking_date, slotTime: row.slot_time, time: String(row.slot_time).slice(0, 5), status: row.status,
+  id: id(row), _id: id(row), doctorId: String(row.doctor_id), bookingDate: dateOnly(row.booking_date),
+  date: dateOnly(row.booking_date), slotTime: String(row.slot_time).slice(0, 5), time: String(row.slot_time).slice(0, 5), status: row.status,
 });
 const appointmentDto = (row) => ({
   id: id(row), _id: id(row), Id: id(row), patientId: String(row.patient_id),
@@ -81,15 +136,28 @@ const hospitalDto = (row) => ({
 });
 
 function auth(requiredRole) {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
     if (!token) return apiError(res, 401, 'Authentication required');
     try {
-      req.auth = jwt.verify(token, JWT_SECRET);
-      if (requiredRole && req.auth.role !== requiredRole) return apiError(res, 403, `${roleName(requiredRole)} access required`);
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const numericId = quoteId(decoded.id);
+      let role = decoded.role;
+      if (!role && numericId) {
+        if (!requiredRole || requiredRole === 'patient') {
+          const patient = (await q('SELECT id FROM "User" WHERE id=$1', [numericId])).rows[0];
+          if (patient) role = 'patient';
+        }
+        if (!role && (!requiredRole || requiredRole === 'doctor')) {
+          const doctor = (await q('SELECT id FROM "Doctor" WHERE id=$1', [numericId])).rows[0];
+          if (doctor) role = 'doctor';
+        }
+      }
+      req.auth = { ...decoded, id: String(decoded.id), role };
+      if (requiredRole && role !== requiredRole) return apiError(res, 403, `${roleName(requiredRole)} access required`);
       next();
-    } catch {
-      return apiError(res, 401, 'Invalid or expired token');
+    } catch (error) {
+      return apiError(res, 401, error.message || 'Invalid or expired token');
     }
   };
 }
@@ -166,6 +234,108 @@ async function initDatabase() {
   `);
   await q("ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS speciality text DEFAULT 'General'");
   await q("ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS emergency boolean DEFAULT false");
+  await q(`
+    CREATE TABLE IF NOT EXISTS "Doctor" (
+      id SERIAL PRIMARY KEY,
+      name text NOT NULL,
+      email text UNIQUE NOT NULL,
+      password text NOT NULL,
+      number text,
+      age integer,
+      gender text,
+      hospital text,
+      speciality text,
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "User" (
+      id SERIAL PRIMARY KEY,
+      name text NOT NULL,
+      email text UNIQUE NOT NULL,
+      password text NOT NULL,
+      number text,
+      age integer,
+      gender text,
+      "registeredDoctorId" integer REFERENCES "Doctor"(id),
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "Slot" (
+      id SERIAL PRIMARY KEY,
+      "doctorId" integer REFERENCES "Doctor"(id) ON DELETE CASCADE,
+      "bookingDate" date NOT NULL,
+      "slotTime" time NOT NULL,
+      status text NOT NULL DEFAULT 'available',
+      "userId" integer REFERENCES "User"(id),
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now(),
+      UNIQUE("doctorId", "bookingDate", "slotTime")
+    );
+    CREATE TABLE IF NOT EXISTS "Appointment" (
+      id SERIAL PRIMARY KEY,
+      "userId" integer REFERENCES "User"(id),
+      "doctorId" integer REFERENCES "Doctor"(id),
+      "slotId" integer REFERENCES "Slot"(id),
+      "slotTime" time NOT NULL,
+      "appointmentDate" date NOT NULL,
+      "reasonOfAppointment" text,
+      status text NOT NULL DEFAULT 'pending',
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "Report" (
+      id SERIAL PRIMARY KEY,
+      "userId" integer REFERENCES "User"(id) ON DELETE CASCADE,
+      "doctorId" integer REFERENCES "Doctor"(id),
+      title text NOT NULL,
+      category text,
+      visibility text DEFAULT 'private',
+      "originalFileName" text,
+      "mimeType" text,
+      "fileSize" bigint DEFAULT 0,
+      "fileData" text,
+      "uploadedBy" text DEFAULT 'Patient',
+      status text DEFAULT 'active',
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "Hospital" (
+      id SERIAL PRIMARY KEY,
+      name text NOT NULL,
+      bed integer DEFAULT 0,
+      room integer DEFAULT 0,
+      "oxygenCylinder" integer DEFAULT 0,
+      address text,
+      latitude double precision,
+      longitude double precision,
+      "geoapifyPlaceId" text UNIQUE,
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "BedBooking" (
+      id SERIAL PRIMARY KEY,
+      "userId" integer REFERENCES "User"(id),
+      "hospitalId" integer REFERENCES "Hospital"(id),
+      "hospitalPlaceId" text,
+      "hospitalName" text,
+      "patientName" text,
+      "patientContact" text,
+      reason text,
+      "expectedArrival" timestamptz,
+      status text DEFAULT 'pending',
+      "createdAt" timestamptz DEFAULT now(),
+      "updatedAt" timestamptz DEFAULT now()
+    );
+  `);
+  await q('ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "registeredDoctorId" integer REFERENCES "Doctor"(id)');
+  await q('ALTER TABLE "Slot" ADD COLUMN IF NOT EXISTS "userId" integer REFERENCES "User"(id)');
+  await q('ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "doctorId" integer REFERENCES "Doctor"(id)');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS address text');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS latitude double precision');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS longitude double precision');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS "geoapifyPlaceId" text UNIQUE');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS "createdAt" timestamptz DEFAULT now()');
+  await q('ALTER TABLE "Hospital" ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz DEFAULT now()');
 }
 
 const stablePartnerPick = (value) => [...String(value)].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 3 === 0;
@@ -237,6 +407,509 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+async function sharedSignup(req, res, role) {
+  const { name, email, password, number, phone, age, gender, hospital, speciality, specialization } = req.body;
+  if (!name || !email || !password) return apiError(res, 400, 'Name, email, and password are required');
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+    if (role === 'doctor') {
+      const result = await q(
+        `INSERT INTO "Doctor"(name,email,password,number,age,gender,hospital,speciality)
+         VALUES($1,lower($2),$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [name, email, passwordHash, number || phone || null, age || null, gender || null, hospital || null, speciality || specialization || null]
+      );
+      const doctor = webDoctorDto(result.rows[0]);
+      const token = jwt.sign({ id: doctor.id, role: 'doctor' }, JWT_SECRET, { expiresIn: '2d' });
+      return res.status(201).json({ success: true, token, msg: token, doctor, user: doctor });
+    }
+    const result = await q(
+      `INSERT INTO "User"(name,email,password,number,age,gender)
+       VALUES($1,lower($2),$3,$4,$5,$6) RETURNING *`,
+      [name, email, passwordHash, number || phone || null, age || null, gender || null]
+    );
+    const user = webUserDto(result.rows[0]);
+    const token = jwt.sign({ id: user.id, role: 'patient' }, JWT_SECRET, { expiresIn: '2d' });
+    res.status(201).json({ success: true, token, msg: token, user });
+  } catch (error) {
+    apiError(res, error.code === '23505' ? 409 : 500, error.code === '23505' ? 'Email already registered' : error.message);
+  }
+}
+
+async function sharedLogin(req, res, role) {
+  const table = role === 'doctor' ? '"Doctor"' : '"User"';
+  const result = await q(`SELECT * FROM ${table} WHERE lower(email)=lower($1)`, [req.body.email || '']);
+  const row = result.rows[0];
+  if (!row || !(await bcrypt.compare(req.body.password || '', row.password))) return apiError(res, 401, 'Invalid email or password');
+  const profile = role === 'doctor' ? webDoctorDto(row) : webUserDto(row);
+  const token = jwt.sign({ id: profile.id, role }, JWT_SECRET, { expiresIn: '2d' });
+  res.json({ success: true, token, msg: token, user: profile, doctor: role === 'doctor' ? profile : undefined });
+}
+
+async function currentSharedProfile(req) {
+  const numericId = quoteId(req.auth.id);
+  if (!numericId) return null;
+  if (req.auth.role === 'doctor') {
+    const doctor = (await q('SELECT * FROM "Doctor" WHERE id=$1', [numericId])).rows[0];
+    return doctor ? webDoctorDto(doctor) : null;
+  }
+  const user = (await q('SELECT * FROM "User" WHERE id=$1', [numericId])).rows[0];
+  return user ? webUserDto(user) : null;
+}
+
+async function sharedAppointmentRows(where, params) {
+  return q(
+    `SELECT a.*, d.name AS "doctorName", d.speciality, d.hospital,
+       u.name AS "patientName", u.number AS "patientContact", u.age AS "patientAge",
+       u.gender AS "patientGender", u.email AS "patientEmail"
+     FROM "Appointment" a
+     JOIN "Doctor" d ON d.id=a."doctorId"
+     JOIN "User" u ON u.id=a."userId"
+     WHERE ${where}
+     ORDER BY a."appointmentDate" DESC, a."slotTime" DESC`,
+    params
+  );
+}
+
+app.post('/api/auth/signup', (req, res) => sharedSignup(req, res, 'patient'));
+app.post('/api/auth/doctor/signup', (req, res) => sharedSignup(req, res, 'doctor'));
+app.post('/api/auth/login', (req, res) => sharedLogin(req, res, 'patient'));
+app.post('/api/auth/doctor/login', (req, res) => sharedLogin(req, res, 'doctor'));
+
+app.get('/api/auth/profile', auth(), async (req, res) => {
+  const profile = await currentSharedProfile(req);
+  if (!profile) return apiError(res, 404, 'Profile not found');
+  res.json({ success: true, user: profile, profile, doctor: req.auth.role === 'doctor' ? profile : undefined });
+});
+app.get('/api/user/info/detail', auth('patient'), async (req, res) => res.json(data(await currentSharedProfile(req))));
+app.get('/api/doctor/info/detail', auth('doctor'), async (req, res) => res.json(data(await currentSharedProfile(req))));
+app.patch('/api/user/info/update', auth('patient'), async (req, res) => {
+  const { name, number, phone, age, gender } = req.body;
+  const result = await q(
+    `UPDATE "User" SET name=COALESCE($2,name), number=COALESCE($3,number), age=COALESCE($4,age),
+     gender=COALESCE($5,gender), "updatedAt"=now() WHERE id=$1 RETURNING *`,
+    [quoteId(req.auth.id), name, number || phone, age, gender]
+  );
+  res.json(data(webUserDto(result.rows[0])));
+});
+app.patch('/api/doctor/info/update', auth('doctor'), async (req, res) => {
+  const { name, number, phone, age, gender, hospital, speciality, specialization } = req.body;
+  const result = await q(
+    `UPDATE "Doctor" SET name=COALESCE($2,name), number=COALESCE($3,number), age=COALESCE($4,age),
+     gender=COALESCE($5,gender), hospital=COALESCE($6,hospital), speciality=COALESCE($7,speciality),
+     "updatedAt"=now() WHERE id=$1 RETURNING *`,
+    [quoteId(req.auth.id), name, number || phone, age, gender, hospital, speciality || specialization]
+  );
+  res.json(data(webDoctorDto(result.rows[0])));
+});
+
+app.get('/api/user/doctor/my', auth('patient'), async (req, res) => {
+  const result = await q(
+    `SELECT d.* FROM "User" u JOIN "Doctor" d ON d.id=u."registeredDoctorId" WHERE u.id=$1`,
+    [quoteId(req.auth.id)]
+  );
+  res.json({ success: true, data: result.rows[0] ? webDoctorDto(result.rows[0]) : null });
+});
+app.get('/api/user/doctor/search/:search', async (req, res) => {
+  const raw = String(req.params.search || '').trim();
+  const term = raw.toLowerCase() === 'dr' ? '' : raw;
+  if (term && term.length < 2) return res.json(data([]));
+  const result = await q(
+    `SELECT d.*, COALESCE(json_agg(to_char(s."bookingDate",'YYYY-MM-DD') || ' | ' || to_char(s."slotTime",'HH24:MI')
+       ORDER BY s."bookingDate",s."slotTime") FILTER (WHERE s.id IS NOT NULL AND s.status='available'),'[]') AS availability
+     FROM "Doctor" d
+     LEFT JOIN "Slot" s ON s."doctorId"=d.id AND s.status='available'
+     WHERE ($1='' OR d.name ILIKE $2 OR d.hospital ILIKE $2 OR d.speciality ILIKE $2)
+     GROUP BY d.id ORDER BY d.name`,
+    [term, `%${term}%`]
+  );
+  res.json(data(result.rows.map(row => ({ ...webDoctorDto(row), availability: row.availability }))));
+});
+app.get('/api/user/doctor/:doctorId', auth('patient'), async (req, res) => {
+  const doctorId = quoteId(req.params.doctorId);
+  if (!doctorId) return apiError(res, 400, 'Valid doctor id is required');
+  const doctor = (await q('SELECT * FROM "Doctor" WHERE id=$1', [doctorId])).rows[0];
+  if (!doctor) return apiError(res, 404, 'Doctor not found');
+  await q(`UPDATE "User" SET "registeredDoctorId"=COALESCE("registeredDoctorId",$2), "updatedAt"=now() WHERE id=$1`, [quoteId(req.auth.id), doctorId]);
+  res.json({ success: true, data: webDoctorDto(doctor) });
+});
+app.get('/api/doctor', async (_req, res) => {
+  const result = await q(
+    `SELECT d.*, COALESCE(json_agg(to_char(s."bookingDate",'YYYY-MM-DD') || ' | ' || to_char(s."slotTime",'HH24:MI')
+       ORDER BY s."bookingDate",s."slotTime") FILTER (WHERE s.id IS NOT NULL AND s.status='available'),'[]') AS availability
+     FROM "Doctor" d LEFT JOIN "Slot" s ON s."doctorId"=d.id AND s.status='available'
+     GROUP BY d.id ORDER BY d.name`
+  );
+  res.json(data(result.rows.map(row => ({ ...webDoctorDto(row), availability: row.availability }))));
+});
+app.get('/api/doctors/by-hospital', async (req, res) => {
+  const hospital = String(req.query.hospital || '').trim();
+  const speciality = String(req.query.speciality || '').trim();
+  const result = await q(
+    `SELECT * FROM "Doctor"
+     WHERE ($1='' OR hospital ILIKE $2)
+       AND ($3='' OR speciality ILIKE $4 OR speciality ILIKE 'General')
+     ORDER BY name`,
+    [hospital, `%${hospital}%`, speciality, `%${speciality}%`]
+  );
+  res.json(data(result.rows.map(webDoctorDto)));
+});
+
+app.post('/api/doctor/slot/publish', auth('doctor'), async (req, res) => {
+  const requestedSlots = Array.isArray(req.body.slots) ? req.body.slots : [req.body];
+  const inserted = [];
+  let skippedCount = 0;
+  for (const item of requestedSlots) {
+    const bookingDate = item.bookingDate || item.date;
+    const slotTime = item.slotTime || item.time;
+    if (!bookingDate || !slotTime) { skippedCount += 1; continue; }
+    const result = await q(
+      `INSERT INTO "Slot"("doctorId","bookingDate","slotTime",status)
+       VALUES($1,$2,$3,'available')
+       ON CONFLICT("doctorId","bookingDate","slotTime") DO UPDATE SET status='available', "userId"=NULL, "updatedAt"=now()
+       WHERE "Slot".status <> 'booked'
+       RETURNING *`,
+      [quoteId(req.auth.id), bookingDate, slotTime]
+    );
+    if (result.rows[0]) inserted.push(webSlotDto(result.rows[0])); else skippedCount += 1;
+  }
+  res.status(201).json({ success: true, data: inserted.length === 1 ? inserted[0] : inserted, skippedCount });
+});
+app.get('/api/doctor/slot/all', auth('doctor'), async (req, res) => {
+  const result = await q('SELECT * FROM "Slot" WHERE "doctorId"=$1 ORDER BY "bookingDate","slotTime"', [quoteId(req.auth.id)]);
+  res.json(data(result.rows.map(webSlotDto)));
+});
+app.delete('/api/doctor/slot/:slotId', auth('doctor'), async (req, res) => {
+  const result = await q(`DELETE FROM "Slot" WHERE id=$1 AND "doctorId"=$2 AND status<>'booked'`, [quoteId(req.params.slotId), quoteId(req.auth.id)]);
+  if (!result.rowCount) return apiError(res, 409, 'Booked slots cannot be deleted');
+  res.json({ success: true, message: 'Slot deleted' });
+});
+app.post('/api/doctor/slots/bulk-cancel', auth('doctor'), async (req, res) => {
+  const slotIds = (Array.isArray(req.body.slotIds) ? req.body.slotIds : []).map(quoteId).filter(Boolean);
+  if (!slotIds.length) return apiError(res, 400, 'slotIds must be a non-empty array');
+  await q(`DELETE FROM "Slot" WHERE id=ANY($1::int[]) AND "doctorId"=$2 AND status<>'booked'`, [slotIds, quoteId(req.auth.id)]);
+  res.json({ success: true, message: 'Slots deleted successfully' });
+});
+
+app.get('/api/user/meetings/slot/:doctorId', async (req, res) => {
+  const doctorId = quoteId(req.params.doctorId);
+  const requestedDate = req.query.date ? dateOnly(req.query.date) : dateOnly(new Date());
+  if (!doctorId) return apiError(res, 400, 'Valid doctor id is required');
+  const result = await q(
+    `SELECT * FROM "Slot"
+     WHERE "doctorId"=$1 AND status='available' AND "bookingDate">=$2
+       AND ($3::date <> CURRENT_DATE OR "bookingDate" > CURRENT_DATE OR "slotTime" > CURRENT_TIME)
+     ORDER BY "bookingDate","slotTime"`,
+    [doctorId, requestedDate, requestedDate]
+  );
+  const slots = req.query.date ? result.rows.filter(row => dateOnly(row.bookingDate) === requestedDate) : result.rows;
+  res.json({ success: true, availableSlots: slots.map(webSlotDto), count: slots.length });
+});
+app.post('/api/user/meetings/book', auth('patient'), async (req, res) => {
+  const doctorId = quoteId(req.body.doctorId);
+  const slotId = quoteId(req.body.slotId);
+  if (!doctorId || !slotId) return apiError(res, 400, 'Doctor and slot are required');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const slot = (await client.query(
+      `SELECT * FROM "Slot" WHERE id=$1 AND "doctorId"=$2 AND status='available' FOR UPDATE`,
+      [slotId, doctorId]
+    )).rows[0];
+    if (!slot) { await client.query('ROLLBACK'); return apiError(res, 409, 'Slot is no longer available'); }
+    const appointmentDate = dateOnly(req.body.appointmentDate || slot.bookingDate);
+    if (appointmentDate !== dateOnly(slot.bookingDate)) {
+      await client.query('ROLLBACK');
+      return apiError(res, 400, 'Selected appointment date does not match the slot date');
+    }
+    const duplicate = (await client.query(
+      `SELECT id FROM "Appointment"
+       WHERE "userId"=$1 AND "doctorId"=$2 AND "appointmentDate"=$3 AND status NOT IN ('cancelled','completed')
+       LIMIT 1`,
+      [quoteId(req.auth.id), doctorId, appointmentDate]
+    )).rows[0];
+    if (duplicate) { await client.query('ROLLBACK'); return apiError(res, 409, 'You already have an appointment with this doctor on this date'); }
+    await client.query(`UPDATE "Slot" SET status='booked', "userId"=$2, "updatedAt"=now() WHERE id=$1`, [slot.id, quoteId(req.auth.id)]);
+    const result = await client.query(
+      `INSERT INTO "Appointment"("userId","doctorId","slotId","slotTime","appointmentDate","reasonOfAppointment",status)
+       VALUES($1,$2,$3,$4,$5,$6,'pending') RETURNING id`,
+      [quoteId(req.auth.id), doctorId, slot.id, slot.slotTime, appointmentDate, req.body.reasonOfAppointment || req.body.reason || null]
+    );
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, data: { appointmentId: id(result.rows[0]) }, appointmentId: id(result.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    apiError(res, 500, error.message);
+  } finally { client.release(); }
+});
+app.get('/api/user/meetings/all', auth('patient'), async (req, res) => {
+  const rows = (await sharedAppointmentRows('a."userId"=$1', [quoteId(req.auth.id)])).rows;
+  res.json(data(rows.map(webAppointmentDto)));
+});
+app.get('/api/doctor/meetings/all', auth('doctor'), async (req, res) => {
+  const rows = (await sharedAppointmentRows('a."doctorId"=$1', [quoteId(req.auth.id)])).rows;
+  res.json(data(rows.map(webAppointmentDto)));
+});
+app.delete('/api/doctor/meetings/:id', auth('doctor'), async (req, res) => {
+  const result = await q(`UPDATE "Appointment" SET status='cancelled', "updatedAt"=now() WHERE id=$1 AND "doctorId"=$2 RETURNING "slotId"`, [quoteId(req.params.id), quoteId(req.auth.id)]);
+  if (result.rows[0]) await q(`UPDATE "Slot" SET status='available', "userId"=NULL, "updatedAt"=now() WHERE id=$1`, [result.rows[0].slotId]);
+  res.json({ success: true, message: 'Appointment cancelled' });
+});
+app.patch('/api/doctor/meetings/:id/status', auth('doctor'), async (req, res) => {
+  const status = req.body.status === 'confirmed' ? 'approved' : req.body.status;
+  if (!['pending', 'approved', 'cancelled', 'completed'].includes(status)) return apiError(res, 400, 'Invalid appointment status');
+  const result = await q(
+    `UPDATE "Appointment" SET status=$3, "updatedAt"=now() WHERE id=$1 AND "doctorId"=$2 RETURNING *`,
+    [quoteId(req.params.id), quoteId(req.auth.id), status]
+  );
+  if (!result.rows[0]) return apiError(res, 404, 'Appointment not found');
+  if (status === 'cancelled') await q(`UPDATE "Slot" SET status='available', "userId"=NULL, "updatedAt"=now() WHERE id=$1`, [result.rows[0].slotId]);
+  res.json({ success: true, message: `Appointment ${status}`, appointment: result.rows[0] });
+});
+app.get('/api/doctor/user/my', auth('doctor'), async (req, res) => {
+  const result = await q(
+    `SELECT u.*, COALESCE(json_agg(json_build_object('id',a.id,'date',a."appointmentDate",
+       'status',a.status,'reason',a."reasonOfAppointment") ORDER BY a."appointmentDate" DESC)
+       FILTER (WHERE a.id IS NOT NULL),'[]') AS "appointmentHistory"
+     FROM "User" u
+     JOIN "Appointment" a ON a."userId"=u.id
+     WHERE a."doctorId"=$1
+     GROUP BY u.id
+     ORDER BY u.name`,
+    [quoteId(req.auth.id)]
+  );
+  res.json(data(result.rows.map(row => ({ ...webUserDto(row), appointmentHistory: row.appointmentHistory }))));
+});
+
+app.get('/api/hospital/all', async (_req, res) => {
+  const result = await q('SELECT * FROM "Hospital" ORDER BY name');
+  res.json(data(result.rows.map(webHospitalDto)));
+});
+app.get('/api/hospital/:id', async (req, res, next) => {
+  if (['geoapify', 'bed-bookings'].includes(req.params.id)) return next();
+  const result = await q('SELECT * FROM "Hospital" WHERE id=$1', [quoteId(req.params.id)]);
+  if (!result.rows[0]) return apiError(res, 404, 'Hospital not found');
+  res.json({ success: true, data: webHospitalDto(result.rows[0]) });
+});
+app.post('/api/hospitals/register-partners', async (req, res) => {
+  const candidates = Array.isArray(req.body.hospitals) ? req.body.hospitals.slice(0, 50) : [];
+  const partners = [];
+  for (const hospital of candidates) {
+    const placeId = String(hospital.placeId || hospital.place_id || hospital.id || '').trim();
+    if (!placeId || !hospital.name) continue;
+    const result = await q(
+      `INSERT INTO "Hospital"(name,bed,room,"oxygenCylinder",address,latitude,longitude,"geoapifyPlaceId")
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT("geoapifyPlaceId") DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,
+         latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,"updatedAt"=now()
+       RETURNING *`,
+      [hospital.name, hospital.bed || 20, hospital.room || 10, hospital.oxygenCylinder || 5,
+        hospital.address || hospital.name, hospital.latitude || null, hospital.longitude || null, placeId]
+    );
+    partners.push(webHospitalDto(result.rows[0]));
+  }
+  res.json(data(partners));
+});
+app.post('/api/hospital/register-partners', async (req, res) => {
+  const candidates = Array.isArray(req.body.hospitals) ? req.body.hospitals.slice(0, 50) : [];
+  const partners = [];
+  for (const hospital of candidates) {
+    const placeId = String(hospital.placeId || hospital.place_id || hospital.id || '').trim();
+    if (!placeId || !hospital.name) continue;
+    const result = await q(
+      `INSERT INTO "Hospital"(name,bed,room,"oxygenCylinder",address,latitude,longitude,"geoapifyPlaceId")
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT("geoapifyPlaceId") DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,
+         latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,"updatedAt"=now()
+       RETURNING *`,
+      [hospital.name, hospital.bed || 20, hospital.room || 10, hospital.oxygenCylinder || 5,
+        hospital.address || hospital.name, hospital.latitude || null, hospital.longitude || null, placeId]
+    );
+    partners.push(webHospitalDto(result.rows[0]));
+  }
+  res.json(data(partners));
+});
+app.post('/api/hospital/seed-nearby', async (req, res) => {
+  const latitude = Number(req.body.latitude);
+  const longitude = Number(req.body.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return apiError(res, 400, 'Valid latitude and longitude are required');
+  const names = ['MediRaksha City Hospital', 'Sanjeevani Partner Hospital', 'Aarogya Multispeciality Centre', 'Jeevan Emergency Hospital'];
+  const offsets = [[0.008, 0.004], [-0.006, 0.009], [0.011, -0.007], [-0.009, -0.006]];
+  const partners = [];
+  for (let index = 0; index < names.length; index++) {
+    const placeId = `local-partner-${latitude.toFixed(2)}-${longitude.toFixed(2)}-${index + 1}`;
+    const result = await q(
+      `INSERT INTO "Hospital"(name,bed,room,"oxygenCylinder",address,latitude,longitude,"geoapifyPlaceId")
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT("geoapifyPlaceId") DO UPDATE SET name=EXCLUDED.name,address=EXCLUDED.address,
+         latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,"updatedAt"=now()
+       RETURNING *`,
+      [names[index], 20 + index * 4, 10 + index * 2, 5 + index,
+        `Partner hospital near ${latitude.toFixed(3)}, ${longitude.toFixed(3)}`,
+        latitude + offsets[index][0], longitude + offsets[index][1], placeId]
+    );
+    partners.push(webHospitalDto(result.rows[0]));
+  }
+  res.json(data(partners));
+});
+app.get('/api/hospitals/by-place/:placeId', async (req, res) => {
+  const result = await q('SELECT * FROM "Hospital" WHERE "geoapifyPlaceId"=$1 OR id::text=$1', [req.params.placeId]);
+  if (!result.rows[0]) return apiError(res, 404, 'Hospital not found');
+  res.json(data(webHospitalDto(result.rows[0])));
+});
+app.get('/api/hospital/geoapify/place/:placeId', async (req, res) => {
+  const result = await q('SELECT * FROM "Hospital" WHERE "geoapifyPlaceId"=$1 OR id::text=$1', [req.params.placeId]);
+  if (!result.rows[0]) return apiError(res, 404, 'Hospital not found');
+  res.json({ success: true, data: webHospitalDto(result.rows[0]) });
+});
+app.get('/api/hospitals/:hospitalId/availability', async (req, res) => {
+  const hospital = (await q('SELECT * FROM "Hospital" WHERE id=$1', [quoteId(req.params.hospitalId)])).rows[0];
+  if (!hospital) return apiError(res, 404, 'Hospital not found');
+  const beds = Number(hospital.bed || 0);
+  res.json({
+    hospitalId: id(hospital), hospitalName: hospital.name, lastInventoryUpdate: hospital.updatedAt,
+    amenities: ['beds', 'rooms', 'oxygen'], wards: [{
+      wardId: id(hospital), wardType: 'general', label: 'General Beds',
+      totalBeds: beds, availableBeds: beds,
+    }],
+  });
+});
+app.post('/api/bed-bookings', auth('patient'), async (req, res) => {
+  const hospitalId = quoteId(req.body.hospitalId);
+  const patientName = req.body.patientName || req.body.contactName;
+  const patientContact = req.body.patientContact || req.body.contactNumber;
+  const reason = req.body.reason || req.body.notes;
+  const result = await q(
+    `INSERT INTO "BedBooking"("userId","hospitalId","hospitalPlaceId","hospitalName","patientName","patientContact",reason,"expectedArrival")
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [quoteId(req.auth.id), hospitalId, req.body.hospitalPlaceId || req.body.placeId || null,
+      req.body.hospitalName || null, patientName, patientContact, reason, req.body.expectedArrival || null]
+  );
+  const row = result.rows[0];
+  res.status(201).json({ ...row, id: id(row), _id: id(row), contactName: row.patientName, contactNumber: row.patientContact });
+});
+app.post('/api/hospital/:hospitalId/bed-bookings', auth('patient'), async (req, res) => {
+  const hospitalId = quoteId(req.params.hospitalId);
+  const hospital = hospitalId ? (await q('SELECT * FROM "Hospital" WHERE id=$1', [hospitalId])).rows[0] : null;
+  const patientName = req.body.patientName || req.body.contactName;
+  const patientContact = req.body.patientContact || req.body.contactNumber;
+  const reason = req.body.reason || req.body.notes;
+  const result = await q(
+    `INSERT INTO "BedBooking"("userId","hospitalId","hospitalPlaceId","hospitalName","patientName","patientContact",reason,"expectedArrival")
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [quoteId(req.auth.id), hospitalId, req.body.hospitalPlaceId || null,
+      hospital?.name || req.body.hospitalName || null, patientName,
+      patientContact, reason, req.body.expectedArrival || null]
+  );
+  const row = result.rows[0];
+  res.status(201).json({ ...row, id: id(row), _id: id(row), contactName: row.patientName, contactNumber: row.patientContact });
+});
+app.get('/api/bed-bookings/my', auth('patient'), async (req, res) => {
+  const result = await q(
+    `SELECT b.*, COALESCE(h.name,b."hospitalName") AS "hospitalName"
+     FROM "BedBooking" b LEFT JOIN "Hospital" h ON h.id=b."hospitalId"
+     WHERE b."userId"=$1 ORDER BY b."createdAt" DESC`,
+    [quoteId(req.auth.id)]
+  );
+  res.json(result.rows.map(row => ({ ...row, id: id(row), _id: id(row), hospitalName: row.hospitalName })));
+});
+app.get('/api/hospital/bed-bookings/my', auth('patient'), async (req, res) => {
+  const result = await q(
+    `SELECT b.*, COALESCE(h.name,b."hospitalName") AS "hospitalName"
+     FROM "BedBooking" b LEFT JOIN "Hospital" h ON h.id=b."hospitalId"
+     WHERE b."userId"=$1 ORDER BY b."createdAt" DESC`,
+    [quoteId(req.auth.id)]
+  );
+  res.json(result.rows.map(row => ({ ...row, id: id(row), _id: id(row), hospitalName: row.hospitalName })));
+});
+app.patch('/api/bed-bookings/:id/cancel', auth('patient'), async (req, res) => {
+  await q(`UPDATE "BedBooking" SET status='cancelled', "updatedAt"=now() WHERE id=$1 AND "userId"=$2`, [quoteId(req.params.id), quoteId(req.auth.id)]);
+  res.json({ success: true, message: 'Booking cancelled' });
+});
+app.delete('/api/hospital/bed-bookings/:id', auth('patient'), async (req, res) => {
+  await q(`UPDATE "BedBooking" SET status='cancelled', "updatedAt"=now() WHERE id=$1 AND "userId"=$2`, [quoteId(req.params.id), quoteId(req.auth.id)]);
+  res.json({ success: true, message: 'Booking cancelled' });
+});
+
+app.get('/api/user/report/all', auth('patient'), async (req, res) => {
+  const result = await q(`SELECT * FROM "Report" WHERE "userId"=$1 AND status='active' ORDER BY "createdAt" DESC`, [quoteId(req.auth.id)]);
+  res.json(data(result.rows.map(webReportDto)));
+});
+app.post('/api/user/report/upload', auth('patient'), upload.single('file'), async (req, res) => {
+  if (!req.file) return apiError(res, 400, 'File is required');
+  const visibility = req.body.visibility === 'shared' ? 'doctor' : req.body.visibility || 'private';
+  const result = await q(
+    `INSERT INTO "Report"("userId","doctorId",title,category,visibility,"originalFileName","mimeType","fileSize","fileData","uploadedBy")
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'Patient') RETURNING *`,
+    [quoteId(req.auth.id), quoteId(req.body.doctorId), req.body.title || req.file.originalname,
+      req.body.category || null, visibility, req.file.originalname, req.file.mimetype,
+      req.file.size, req.file.buffer.toString('base64')]
+  );
+  res.status(201).json(data(webReportDto(result.rows[0])));
+});
+app.get('/api/user/report/:id', auth(), async (req, res) => {
+  const result = await q(
+    `SELECT r.* FROM "Report" r WHERE r.id=$1 AND
+     (r."userId"=$2 OR ($3='doctor' AND r.visibility<>'private' AND
+      (r."doctorId"=$2 OR EXISTS (SELECT 1 FROM "Appointment" a WHERE a."userId"=r."userId" AND a."doctorId"=$2))))`,
+    [quoteId(req.params.id), quoteId(req.auth.id), req.auth.role]
+  );
+  if (!result.rows[0]) return apiError(res, 404, 'Report not found');
+  res.json(data(webReportDto(result.rows[0], true)));
+});
+app.delete('/api/user/report/:id', auth('patient'), async (req, res) => {
+  await q(`UPDATE "Report" SET status='deleted', "updatedAt"=now() WHERE id=$1 AND "userId"=$2`, [quoteId(req.params.id), quoteId(req.auth.id)]);
+  res.json({ success: true, message: 'Report deleted' });
+});
+app.patch('/api/user/report/:id/visibility', auth('patient'), async (req, res) => {
+  const visibility = req.body.visibility === 'shared' ? 'doctor' : req.body.visibility;
+  if (!['private', 'doctor'].includes(visibility)) return apiError(res, 400, 'Visibility must be private or shared');
+  const result = await q(
+    `UPDATE "Report" SET visibility=$3, "updatedAt"=now() WHERE id=$1 AND "userId"=$2 AND status='active' RETURNING *`,
+    [quoteId(req.params.id), quoteId(req.auth.id), visibility]
+  );
+  if (!result.rows[0]) return apiError(res, 404, 'Report not found');
+  res.json(data(webReportDto(result.rows[0])));
+});
+app.get('/api/doctor/shared-reports', auth('doctor'), async (req, res) => {
+  const result = await q(
+    `SELECT DISTINCT r.*, u.name AS "patientName" FROM "Report" r
+     JOIN "User" u ON u.id=r."userId"
+     LEFT JOIN "Appointment" a ON a."userId"=r."userId"
+     WHERE r.status='active' AND r.visibility<>'private' AND (r."doctorId"=$1 OR a."doctorId"=$1)
+     ORDER BY r."createdAt" DESC`,
+    [quoteId(req.auth.id)]
+  );
+  res.json(result.rows.map(row => ({ ...webReportDto(row), patientName: row.patientName })));
+});
+app.post('/api/analyze-report', auth(), async (req, res) => {
+  const reportId = quoteId(req.body.fileId || req.body.reportId);
+  if (!reportId) return apiError(res, 400, 'Report id is required');
+  const report = (await q(
+    `SELECT r.* FROM "Report" r WHERE r.id=$1 AND
+     (r."userId"=$2 OR ($3='doctor' AND r.visibility<>'private' AND
+      (r."doctorId"=$2 OR EXISTS (SELECT 1 FROM "Appointment" a WHERE a."userId"=r."userId" AND a."doctorId"=$2))))`,
+    [reportId, quoteId(req.auth.id), req.auth.role]
+  )).rows[0];
+  if (!report) return apiError(res, 404, 'Report not found or not shared');
+  const readableText = report.mimeType?.startsWith('text/') && report.fileData
+    ? Buffer.from(report.fileData, 'base64').toString('utf8').slice(0, 12000)
+    : '';
+  let result;
+  try {
+    result = await groqJson(
+      'You are a cautious medical report assistant. Return JSON with history as a concise summary and mandatory_care as an array. State limitations when report contents are unavailable. Do not diagnose or prescribe.',
+      readableText || `Only report metadata is available. Filename: ${report.originalFileName || report.title}; category: ${report.category || 'uncategorized'}; mime type: ${report.mimeType}.`
+    );
+  } catch {
+    result = {
+      history: `Automated analysis is unavailable. Report metadata: ${report.originalFileName || report.title} (${report.category || 'uncategorized'}).`,
+      mandatory_care: ['Have a qualified clinician review the original report before making medical decisions.'],
+      aiAvailable: false,
+    };
+  }
+  res.json(result);
+});
+
 async function signup(req, res, role) {
   const { name, email, password, number, phone, age, gender, hospital, speciality, specialization } = req.body;
   if (!name || !email || !password) return apiError(res, 400, 'Name, email, and password are required');
@@ -303,8 +976,15 @@ app.get('/api/user/doctor/search/:search', async (req, res) => {
   res.json(data(result.rows.map(row => ({ ...userDto(row), availability: row.availability }))));
 });
 app.get('/api/doctor', async (_req, res) => {
-  const result = await q("SELECT * FROM users WHERE role='doctor' ORDER BY name");
-  res.json(result.rows.map(userDto));
+  const result = await q(
+    `SELECT u.*, COALESCE(json_agg(to_char(s.booking_date,'YYYY-MM-DD') || ' | ' || to_char(s.slot_time,'HH24:MI') ORDER BY s.booking_date,s.slot_time)
+     FILTER (WHERE s.id IS NOT NULL AND s.status='available'),'[]') availability
+     FROM users u LEFT JOIN slots s ON s.doctor_id=u.id
+     WHERE u.role='doctor'
+     GROUP BY u.id
+     ORDER BY u.name`
+  );
+  res.json(data(result.rows.map(row => ({ ...userDto(row), availability: row.availability }))));
 });
 app.get('/api/doctors/by-hospital', async (req, res) => {
   const hospital = String(req.query.hospital || '').trim();
@@ -336,7 +1016,16 @@ app.delete('/api/doctor/slot/:slotId', auth('doctor'), async (req, res) => {
   await q("UPDATE slots SET status='cancelled' WHERE id=$1 AND doctor_id=$2", [req.params.slotId, req.auth.id]);
   res.json({ message: 'Slot cancelled' });
 });
+app.post('/api/doctor/slots/bulk-cancel', auth('doctor'), async (req, res) => {
+  const { slotIds } = req.body;
+  if (!Array.isArray(slotIds) || !slotIds.length) {
+    return apiError(res, 400, 'slotIds must be a non-empty array');
+  }
+  await q("UPDATE slots SET status='cancelled' WHERE id=ANY($1::uuid[]) AND doctor_id=$2", [slotIds, req.auth.id]);
+  res.json({ message: 'Slots cancelled successfully' });
+});
 app.get('/api/user/meetings/slot/:doctorId', async (req, res) => {
+  if (!req.query.date) return apiError(res, 400, 'Appointment date is required');
   const result = await q(
     "SELECT * FROM slots WHERE doctor_id=$1 AND booking_date=$2 AND status='available' ORDER BY slot_time",
     [req.params.doctorId, req.query.date]

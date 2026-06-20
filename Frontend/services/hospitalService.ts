@@ -71,7 +71,7 @@ export async function getHospitalByPlaceId(
   placeId: string
 ): Promise<{ isPartner: boolean; hospital?: HospitalProfile }> {
   try {
-    const { data } = await apiClient.get(`/hospitals/by-place/${encodeURIComponent(placeId)}`);
+    const { data } = await apiClient.get(`/hospital/geoapify/place/${encodeURIComponent(placeId)}`);
     const hospital = data?.data;
     if (!hospital) return { isPartner: false };
 
@@ -107,12 +107,41 @@ export async function getHospitalByPlaceId(
 export async function getHospitalAvailability(
   hospitalId: string
 ): Promise<HospitalAvailability> {
-  const { data } = await apiClient.get(`/hospitals/${hospitalId}/availability`);
-  return data;
+  try {
+    const { data } = await apiClient.get(`/hospital/${hospitalId}`);
+    const hospital = data?.data ?? data;
+
+    // The live backend returns a flat hospital row with a 'bed' integer field.
+    // We adapt it into the ward-based shape that BookBed.tsx expects.
+    const availableBeds = Number(hospital?.bed ?? 0);
+    const ward: WardAvailability = {
+      wardId: `${hospitalId}-general`,
+      wardType: 'general',
+      label: 'General Ward',
+      totalBeds: availableBeds,
+      availableBeds,
+    };
+
+    return {
+      hospitalId: String(hospital?.id ?? hospitalId),
+      hospitalName: hospital?.name ?? 'Hospital',
+      lastInventoryUpdate: hospital?.updated_at,
+      amenities: Array.isArray(hospital?.amenities) ? hospital.amenities : [],
+      wards: availableBeds > 0 ? [ward] : [],
+    };
+  } catch {
+    // Return a safe empty availability so BookBed.tsx can show "No wards configured"
+    return {
+      hospitalId,
+      hospitalName: 'Hospital',
+      amenities: [],
+      wards: [],
+    };
+  }
 }
 
 export async function registerPartnerHospitals(hospitals: any[]): Promise<any[]> {
-  const { data } = await apiClient.post('/hospitals/register-partners', {
+  const { data } = await apiClient.post('/hospital/register-partners', {
     hospitals: hospitals.map((hospital) => ({
       placeId: hospital.id,
       name: hospital.name,
@@ -123,12 +152,12 @@ export async function registerPartnerHospitals(hospitals: any[]): Promise<any[]>
       speciality: hospital.speciality,
       emergency: hospital.emergency,
     })),
-  });
+  }).catch(() => ({ data: { data: [] } }));
   return Array.isArray(data?.data) ? data.data : [];
 }
 
 export async function seedNearbyPartnerHospitals(latitude: number, longitude: number): Promise<any[]> {
-  const { data } = await apiClient.post('/hospitals/seed-nearby', { latitude, longitude });
+  const { data } = await apiClient.post('/hospital/seed-nearby', { latitude, longitude }).catch(() => ({ data: { data: [] } }));
   return Array.isArray(data?.data) ? data.data : [];
 }
 
@@ -139,8 +168,32 @@ export async function seedNearbyPartnerHospitals(latitude: number, longitude: nu
 export async function createBedBooking(
   payload: BedBookingPayload
 ): Promise<BedBooking> {
-  const { data } = await apiClient.post('/bed-bookings', payload);
-  return data;
+  // The live backend expects: bedsRequested, contactName, contactNumber, notes, hospitalName
+  // It does NOT have wardId/reason/expectedArrival in its schema.
+  const { data } = await apiClient.post(`/hospital/${payload.hospitalId}/bed-bookings`, {
+    bedsRequested: 1,
+    contactName: payload.patientName,
+    contactNumber: payload.patientContact,
+    notes: `Ward: ${payload.wardId} | Reason: ${payload.reason}${payload.expectedArrival ? ` | Expected: ${payload.expectedArrival}` : ''}`,
+    hospitalName: undefined, // backend resolves name from DB
+  });
+
+  // Map the backend response into our BedBooking shape
+  const row = data?.data ?? data;
+  return {
+    _id: String(row?.id ?? ''),
+    hospitalId: String(row?.hospitalId ?? payload.hospitalId),
+    wardId: payload.wardId,
+    patientId: String(row?.userId ?? ''),
+    patientName: row?.contactName ?? payload.patientName,
+    patientContact: row?.contactNumber ?? payload.patientContact,
+    reason: payload.reason,
+    expectedArrival: payload.expectedArrival,
+    status: row?.status === 'active' ? 'confirmed' : (row?.status ?? 'confirmed'),
+    holdExpiresAt: row?.updated_at ?? new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    createdAt: row?.created_at ?? new Date().toISOString(),
+    hospitalName: row?.hospitalName,
+  };
 }
 
 /**
@@ -148,7 +201,7 @@ export async function createBedBooking(
  * Used in MyBedBookings.tsx
  */
 export async function getMyBedBookings(): Promise<BedBooking[]> {
-  const { data } = await apiClient.get('/bed-bookings/my');
+  const { data } = await apiClient.get('/hospital/bed-bookings/my');
   return Array.isArray(data) ? data : [];
 }
 
@@ -157,5 +210,5 @@ export async function getMyBedBookings(): Promise<BedBooking[]> {
  * Decrements reservedBeds on backend automatically
  */
 export async function cancelBedBooking(bookingId: string): Promise<void> {
-  await apiClient.patch(`/bed-bookings/${bookingId}/cancel`);
+  await apiClient.delete(`/hospital/bed-bookings/${bookingId}`);
 }
