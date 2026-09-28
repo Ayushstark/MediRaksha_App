@@ -2,7 +2,14 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 const getBackendUrls = () => {
-    const configuredUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+    const rawConfiguredUrl = process.env.EXPO_PUBLIC_BACKEND_URL?.trim();
+    const configuredUrl = rawConfiguredUrl
+        ? `${rawConfiguredUrl.replace(/\/+$/, '')}${/\/api$/i.test(rawConfiguredUrl) ? '' : '/api'}`
+        : undefined;
+
+    if (configuredUrl && !/localhost|127\.0\.0\.1|10\.0\.2\.2/i.test(configuredUrl)) {
+        return [configuredUrl];
+    }
 
     const expoConstants = Constants as any;
     const hostUri =

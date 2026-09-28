@@ -108,7 +108,8 @@ export default function MyPatients() {
                                     <View key={idx} style={styles.historyItem}>
                                         <View style={styles.historyDot} />
                                         <Text style={styles.historyDate}>
-                                            {new Date(appt.date).toLocaleDateString()}
+                                            {new Date(`${String(appt.date).slice(0, 10)}T00:00:00`).toLocaleDateString()}
+                                            {appt.slotTime ? ` at ${String(appt.slotTime).slice(0, 5)}` : ''}
                                         </Text>
                                         <Text style={styles.historyStatus}>{appt.status}</Text>
                                     </View>

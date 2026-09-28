@@ -20,7 +20,7 @@ export const signup = async (
   gender?: string,
   phone?: string
 ) => {
-  const normalizedEmailOrId = email.trim().toLowerCase();
+  const normalizedEmailOrId = email.trim();
   const isDoctor = role === 'Doctor';
   const endpoint = isDoctor ? '/auth/doctor/signup' : '/auth/signup';
   const normalizedGender = gender?.trim().toLowerCase();
@@ -65,7 +65,7 @@ export const login = async (
   password: string,
   role: string = 'Patient'
 ) => {
-  const normalizedEmailOrId = emailOrId.trim().toLowerCase();
+  const normalizedEmailOrId = emailOrId.trim();
   const isDoctor = role === 'Doctor';
   const endpoint = role === 'Doctor' ? '/auth/doctor/login' : '/auth/login';
   const requestData = role === 'Doctor'

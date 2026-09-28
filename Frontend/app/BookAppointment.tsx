@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -23,9 +23,12 @@ import {
     bookAppointment,
     getAvailableSlots,
     getDoctors,
+    getPatientAppointments,
     normalizeSpeciality,
     toDateString,
 } from '../services/medirakshaApi';
+import { scheduleAppointmentReminder } from '../services/appointmentReminders';
+import { colors } from '../constants/theme';
 
 const SPECIALTIES = [
     { id: '1', name: 'General Physician', icon: 'stethoscope' },
@@ -45,6 +48,15 @@ export default function BookAppointment() {
     const params = useLocalSearchParams();
     const { doctorId, doctorName } = params;
     const hasDirectDoctor = Boolean(doctorId || doctorName);
+    const passedAvailability = useMemo(() => {
+        try {
+            const raw = Array.isArray(params.availability) ? params.availability[0] : params.availability;
+            const parsed = raw ? JSON.parse(String(raw)) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    }, [params.availability]);
 
     // --- STEP STATE ---
     const [step, setStep] = useState(1);
@@ -126,9 +138,19 @@ export default function BookAppointment() {
             if (found) {
                 setSelectedDoctor(found);
                 setSelectedSpecialty(found.specialty);
+            } else if (doctorId || doctorName) {
+                setSelectedDoctor({
+                    id: String(doctorId || ''),
+                    name: String(doctorName || 'Selected Doctor'),
+                    specialty: '',
+                    hospitalName: 'MediRaksha Clinic',
+                });
+                if (passedAvailability.length) {
+                    setSlots(passedAvailability);
+                }
             }
         }
-    }, [doctorId, doctorName, allDoctors]);
+    }, [doctorId, doctorName, allDoctors, passedAvailability]);
 
     // 4. Load Slots when Doctor/Date changes
     useEffect(() => {
@@ -181,6 +203,23 @@ export default function BookAppointment() {
      */
     const clientSideFilter = (dateStr: string) => {
         const availability = rawDoctorMap[selectedDoctor?.id] || [];
+        if (!availability.length && passedAvailability.length) {
+            const filteredPassedSlots = passedAvailability
+                .filter((slot: any) => (slot.bookingDate || slot.date) === dateStr)
+                .map((slot: any) => ({
+                    ...slot,
+                    _id: String(slot.id || slot._id),
+                    id: String(slot.id || slot._id),
+                    time: slot.time || slot.slotTime,
+                    slotTime: slot.slotTime || slot.time,
+                    bookingDate: slot.bookingDate || slot.date,
+                    date: slot.date || slot.bookingDate,
+                }));
+            setSlots(filteredPassedSlots);
+            console.log(`[BookAppointment] Passed availability found ${filteredPassedSlots.length} slot(s) for ${dateStr}`);
+            return;
+        }
+
         const prefix = `${dateStr} | `;
         const filtered = availability
             .filter((entry: string) => entry.startsWith(prefix))
@@ -279,30 +318,87 @@ export default function BookAppointment() {
                 throw new Error('Please select a server-published slot.');
             }
 
+            const slotId = String(selectedTimeSlot.id || selectedTimeSlot._id || '');
+            const latestSlots = await getAvailableSlots(String(selectedDoctor?.id), dateStr).catch((error: any) => {
+                console.warn('[BookAppointment] Could not refresh slots before booking:', error?.response?.status || error?.message);
+                return slots;
+            });
+            const stillAvailable = latestSlots.find((slot: any) =>
+                String(slot.id || slot._id) === slotId && slot.status !== 'booked'
+            );
+
+            if (!stillAvailable) {
+                setSlots(latestSlots);
+                setSelectedTimeSlot(null);
+                Alert.alert(
+                    'Slot No Longer Available',
+                    'This slot was already booked or removed. Please pick another available time.'
+                );
+                return;
+            }
+
+            const existingAppointments = await getPatientAppointments().catch((error: any) => {
+                console.warn('[BookAppointment] Could not check existing appointments:', error?.response?.status || error?.message);
+                return [];
+            });
+            const duplicateAppointment = existingAppointments.find((appointment: any) =>
+                String(appointment.doctorId ?? appointment.doctor?.id ?? appointment.doctor?._id ?? '') === String(selectedDoctor?.id) &&
+                String(appointment.appointmentDate || appointment.date || '').slice(0, 10) === dateStr &&
+                !['cancelled', 'completed'].includes(String(appointment.status || '').toLowerCase())
+            );
+
+            if (duplicateAppointment) {
+                Alert.alert(
+                    'Appointment Already Booked',
+                    `You already have an appointment with this doctor on ${dateStr} at ${duplicateAppointment.slotTime || duplicateAppointment.startTime || 'the selected time'}.`
+                );
+                return;
+            }
+
             if (selectedReport) {
                 await uploadSelectedReport();
             }
 
             const response = await bookAppointment({
                 doctorId: selectedDoctor?.id,
-                slotId: selectedTimeSlot.id || selectedTimeSlot._id,
+                slotId,
                 appointmentDate: dateStr,
                 reasonOfAppointment: reason.trim(),
             });
             if (response?.success === false || !response?.appointmentId) {
                 throw new Error(response?.message || 'Appointment confirmation was not returned by the server.');
             }
+            await scheduleAppointmentReminder({
+                id: String(response.appointmentId),
+                role: 'patient',
+                appointmentDate: dateStr,
+                slotTime: selectedTimeSlot.slotTime || selectedTimeSlot.time,
+                doctorName: selectedDoctor?.name,
+            });
             console.log('[BookAppointment] Booking API success');
             setSlots(prev => prev.filter(slot => (slot.id || slot._id) !== (selectedTimeSlot.id || selectedTimeSlot._id)));
             setShowSuccess(true);
         } catch (error: any) {
-            console.error('Booking Logic Error:', error);
-            Alert.alert(
-                'Booking Failed',
+            const status = error?.response?.status;
+            const message =
                 error.response?.data?.message ||
                 error.response?.data?.detail ||
                 error.message ||
-                'Could not confirm this appointment.'
+                'Could not confirm this appointment.';
+
+            if (status === 409) {
+                console.warn('[BookAppointment] Booking conflict:', message);
+                const refreshedSlots = await getAvailableSlots(String(selectedDoctor?.id), dateStr).catch(() => []);
+                setSlots(refreshedSlots);
+                setSelectedTimeSlot(null);
+                Alert.alert('Slot Already Booked', 'This slot is no longer available. Please choose another slot.');
+                return;
+            }
+
+            console.warn('[BookAppointment] Booking failed:', status || message);
+            Alert.alert(
+                'Booking Failed',
+                message
             );
         } finally {
             setLoading(false);
@@ -311,6 +407,8 @@ export default function BookAppointment() {
 
 
     // --- UI COMPONENTS FOR EACH STEP ---
+    const stepLabels = ['Consult', 'Date & Time', 'Confirm'];
+
     const renderHeader = () => (
         <View style={styles.header}>
             <TouchableOpacity onPress={step === 1 ? () => router.back() : handlePrevStep}>
@@ -318,9 +416,27 @@ export default function BookAppointment() {
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
                 <Text style={styles.headerTitle}>Book Appointment</Text>
-                <Text style={styles.stepIndicator}>Step {step} of 3</Text>
+                <Text style={styles.stepIndicator}>{stepLabels[step - 1]} • Step {step} of 3</Text>
             </View>
             <View style={{ width: 24 }} />
+        </View>
+    );
+
+    const renderStepper = () => (
+        <View style={styles.stepperCard}>
+            {stepLabels.map((label, index) => {
+                const current = index + 1;
+                const active = current <= step;
+                return (
+                    <View key={label} style={styles.stepperItem}>
+                        <View style={[styles.stepperDot, active && styles.stepperDotActive]}>
+                            <Text style={[styles.stepperDotText, active && styles.stepperDotTextActive]}>{current}</Text>
+                        </View>
+                        <Text style={[styles.stepperLabel, active && styles.stepperLabelActive]}>{label}</Text>
+                        {index < stepLabels.length - 1 && <View style={[styles.stepperLine, current < step && styles.stepperLineActive]} />}
+                    </View>
+                );
+            })}
         </View>
     );
 
@@ -563,6 +679,7 @@ export default function BookAppointment() {
         >
             {renderHeader()}
             <ScrollView contentContainerStyle={styles.scrollContent}>
+                {renderStepper()}
                 {step === 1 && renderStep3()}
                 {step === 2 && renderStep4()}
                 {step === 3 && renderStep5()}
@@ -607,6 +724,34 @@ const styles = StyleSheet.create({
     headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A237E' },
     stepIndicator: { fontSize: 12, color: '#64748B' },
     scrollContent: { padding: 20 },
+    stepperCard: {
+        backgroundColor: '#fff',
+        borderRadius: 18,
+        padding: 14,
+        marginBottom: 18,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    stepperItem: { flex: 1, alignItems: 'center', flexDirection: 'row' },
+    stepperDot: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        backgroundColor: '#F1F5F9',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    stepperDotActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    stepperDotText: { color: '#64748B', fontWeight: '900', fontSize: 12 },
+    stepperDotTextActive: { color: '#fff' },
+    stepperLabel: { color: '#64748B', fontSize: 11, fontWeight: '800', marginLeft: 6, flexShrink: 1 },
+    stepperLabelActive: { color: colors.primary },
+    stepperLine: { flex: 1, height: 2, backgroundColor: '#E2E8F0', marginHorizontal: 6 },
+    stepperLineActive: { backgroundColor: colors.primary },
     stepContainer: { flex: 1 },
     label: { fontSize: 24, fontWeight: '800', color: '#1E293B', marginBottom: 20 },
     specialtyGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
@@ -657,6 +802,8 @@ const styles = StyleSheet.create({
     typeBtn: { width: '48%', backgroundColor: '#fff', padding: 20, borderRadius: 15, alignItems: 'center', elevation: 2 },
     typeText: { marginTop: 10, fontWeight: 'bold' },
     activeType: { backgroundColor: '#1A237E' },
+    selectedDoctorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E0E7FF' },
+    selectedDoctorName: { fontSize: 16, fontWeight: '800', color: '#1E293B' },
     datePickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 20 },
     dateText: { marginLeft: 10, fontSize: 16 },
     subLabel: { fontSize: 16, fontWeight: 'bold', marginBottom: 15, color: '#1A237E' },
@@ -665,6 +812,11 @@ const styles = StyleSheet.create({
     activeSlot: { backgroundColor: '#1A237E' },
     slotText: { color: '#1A237E', fontWeight: '500' },
     input: { backgroundColor: '#fff', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#E2E8F0' },
+    reasonInput: { minHeight: 100 },
+    confirmSummary: { backgroundColor: '#fff', borderRadius: 15, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#E2E8F0' },
+    summaryLine: { color: '#1E293B', fontSize: 14, marginBottom: 8, fontWeight: '600' },
+    reportButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EEF2FF', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#C7D2FE' },
+    reportButtonText: { color: '#1A237E', fontWeight: '800', fontSize: 14 },
     genderRowContainer: { marginBottom: 20 },
     genderLabel: { fontSize: 16, fontWeight: '700', color: '#1E293B', marginBottom: 10 },
     genderRow: { flexDirection: 'row', backgroundColor: '#F1F5F9', borderRadius: 12, padding: 4 },

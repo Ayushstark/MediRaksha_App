@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
-  Alert,
-  KeyboardAvoidingView,
-  ScrollView,
-  Platform,
-  ActivityIndicator,
+  View,
 } from 'react-native';
-import API from '../apiClient';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import API from '../apiClient';
+import { AppButton, AppHeader } from '../components/ui/AppUI';
+import { useToast } from '../components/ui/ToastProvider';
+import { colors, radius, shadows, spacing } from '../constants/theme';
 import { getCurrentProfile } from '../services/medirakshaApi';
 
 const sexOptions = ['Male', 'Female', 'Third Gender'];
@@ -30,15 +34,14 @@ export default function ProfileEditScreen() {
   const [role, setRole] = useState('');
 
   const router = useRouter();
+  const { showToast } = useToast();
 
-  // Fetch profile on mount
   useEffect(() => {
     const fetchProfile = async () => {
       try {
         setLoading(true);
         const userData = await getCurrentProfile('Patient');
 
-        // Basic role detection from data if possible, default to Patient
         setRole(userData.role || 'Patient');
 
         if (userData) {
@@ -48,7 +51,7 @@ export default function ProfileEditScreen() {
           setSex(userData.gender || '');
           setPhone(userData.phoneNumber || userData.number || '');
         }
-      } catch (error: any) {
+      } catch {
         Alert.alert('Error', 'Failed to load profile. Please login again.');
         router.replace('/Login');
       } finally {
@@ -57,9 +60,8 @@ export default function ProfileEditScreen() {
     };
 
     fetchProfile();
-  }, []);
+  }, [router]);
 
-  // Save profile handler
   const handleSave = async () => {
     if (!name.trim() || !sex.trim()) {
       Alert.alert('Validation Error', 'Please fill in all required fields.');
@@ -75,10 +77,10 @@ export default function ProfileEditScreen() {
         number: phone.trim()
       });
 
-      Alert.alert('Success', 'Profile updated successfully!');
+      showToast({ type: 'success', message: 'Profile updated successfully' });
       router.replace(role === 'Doctor' ? '/DoctorDashboard' : '/PatientDashboard');
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.msg || error.message || 'Failed to update profile');
+      showToast({ type: 'error', message: error.response?.data?.msg || error.message || 'Failed to update profile' });
     } finally {
       setSaving(false);
     }
@@ -87,7 +89,8 @@ export default function ProfileEditScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#1A237E" />
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Loading your profile...</Text>
       </View>
     );
   }
@@ -95,163 +98,178 @@ export default function ProfileEditScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={{ flex: 1 }}
+      style={styles.root}
     >
-      <ScrollView
-        contentContainerStyle={styles.container}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text style={styles.header}>Edit Profile</Text>
-
-        <TextInput
-          style={styles.input}
-          placeholder="Full Name *"
-          value={name}
-          onChangeText={setName}
-          autoCapitalize="words"
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <AppHeader
+          title="Edit Profile"
+          subtitle="Keep your care details updated for appointments and reports."
+          onBack={() => router.back()}
         />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email *"
-          value={email}
-          editable={false}
-        />
+        <View style={styles.formCard}>
+          <View style={styles.cardHeader}>
+            <View style={styles.headerIcon}>
+              <Feather name="user" size={20} color={colors.primary} />
+            </View>
+            <View>
+              <Text style={styles.cardTitle}>Personal Information</Text>
+              <Text style={styles.cardSub}>Required fields are marked with *</Text>
+            </View>
+          </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Phone Number"
-          value={phone}
-          onChangeText={setPhone}
-          keyboardType="phone-pad"
-        />
+          <Field label="Full Name *" value={name} onChangeText={setName} autoCapitalize="words" />
+          <Field label="Email *" value={email} editable={false} muted />
+          <Field label="Phone Number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <Field label="Age" value={age} onChangeText={setAge} keyboardType="numeric" />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Age"
-          value={age}
-          onChangeText={setAge}
-          keyboardType="numeric"
-        />
-
-        <Text style={styles.sectionLabel}>Sex *</Text>
-        <View style={styles.radioGroup}>
-          {sexOptions.map(option => (
-            <TouchableOpacity
-              key={option}
-              style={styles.radioOption}
-              onPress={() => setSex(option)}
-            >
-              <View
-                style={[
-                  styles.radioDot,
-                  sex === option && styles.radioDotSelected,
-                ]}
+          <Text style={styles.sectionLabel}>Sex *</Text>
+          <View style={styles.optionWrap}>
+            {sexOptions.map(option => (
+              <ChoicePill
+                key={option}
+                label={option}
+                active={sex === option}
+                onPress={() => setSex(option)}
               />
-              <Text style={styles.radioLabel}>{option}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            ))}
+          </View>
 
-        <Text style={styles.sectionLabel}>Role *</Text>
-        <View style={styles.radioGroup}>
-          {roleOptions.map(option => (
-            <TouchableOpacity
-              key={option}
-              style={styles.radioOption}
-              onPress={() => setRole(option)}
-            >
-              <View
-                style={[
-                  styles.radioDot,
-                  role === option && styles.radioDotSelected,
-                ]}
+          <Text style={styles.sectionLabel}>Role *</Text>
+          <View style={styles.optionWrap}>
+            {roleOptions.map(option => (
+              <ChoicePill
+                key={option}
+                label={option}
+                active={role === option}
+                onPress={() => setRole(option)}
               />
-              <Text style={styles.radioLabel}>{option}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            ))}
+          </View>
 
-        <TouchableOpacity
-          onPress={handleSave}
-          style={styles.saveButton}
-          disabled={saving}
-        >
-          <Text style={styles.saveButtonText}>
-            {saving ? 'Saving...' : 'Save Profile'}
-          </Text>
-        </TouchableOpacity>
+          <AppButton
+            title={saving ? 'Saving...' : 'Save Profile'}
+            onPress={handleSave}
+            loading={saving}
+            icon={<Ionicons name="checkmark-circle-outline" size={19} color="#fff" />}
+            style={styles.saveButton}
+          />
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
+const Field = ({ label, muted, ...props }: any) => (
+  <View style={styles.fieldWrap}>
+    <Text style={styles.fieldLabel}>{label}</Text>
+    <TextInput
+      style={[styles.input, muted && styles.mutedInput]}
+      placeholder={label}
+      placeholderTextColor={colors.textSoft}
+      {...props}
+    />
+  </View>
+);
+
+const ChoicePill = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) => (
+  <TouchableOpacity style={[styles.choicePill, active && styles.choicePillActive]} onPress={onPress}>
+    <View style={[styles.choiceDot, active && styles.choiceDotActive]} />
+    <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{label}</Text>
+  </TouchableOpacity>
+);
+
 const styles = StyleSheet.create({
-  container: {
-    padding: 24,
-    backgroundColor: '#E8F5E9',
-    flexGrow: 1,
-  },
+  root: { flex: 1, backgroundColor: colors.background },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#E8F5E9',
+    backgroundColor: colors.background,
   },
-  header: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#1A237E',
-    marginBottom: 30,
-    alignSelf: 'center',
+  loadingText: { color: colors.textMuted, fontWeight: '700', marginTop: spacing.md },
+  formCard: {
+    margin: spacing.xl,
+    marginTop: -18,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadows.card,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  headerIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  cardTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  cardSub: { color: colors.textMuted, marginTop: 3, fontSize: 12, fontWeight: '600' },
+  fieldWrap: { marginBottom: spacing.md },
+  fieldLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '900', marginBottom: spacing.xs },
   input: {
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
+    minHeight: 52,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  mutedInput: {
+    color: colors.textMuted,
+    backgroundColor: '#F1F5F9',
   },
   sectionLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 6,
-    color: '#1A237E',
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+    color: colors.text,
   },
-  radioGroup: {
+  optionWrap: {
     flexDirection: 'row',
-    marginBottom: 10,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
-  radioOption: {
+  choicePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 20,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  radioDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+  choicePillActive: {
+    backgroundColor: colors.primarySoft,
+    borderColor: '#C7D2FE',
+  },
+  choiceDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     borderWidth: 2,
-    borderColor: '#1A237E',
-    marginRight: 8,
-    backgroundColor: '#fff',
+    borderColor: colors.textSoft,
+    marginRight: spacing.xs,
   },
-  radioDotSelected: {
-    backgroundColor: '#1A237E',
+  choiceDotActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
   },
-  radioLabel: {
-    fontSize: 16,
-    color: '#1A237E',
-  },
-  saveButton: {
-    backgroundColor: '#1A237E',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
+  choiceText: { color: colors.textMuted, fontWeight: '800' },
+  choiceTextActive: { color: colors.primary },
+  saveButton: { marginTop: spacing.xl },
 });

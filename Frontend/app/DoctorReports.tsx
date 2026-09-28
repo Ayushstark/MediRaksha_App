@@ -1,30 +1,48 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-    View,
-    Text,
-    StyleSheet,
-    TouchableOpacity,
-    ScrollView,
-    ActivityIndicator,
-    Alert,
+    Modal,
     Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
-import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import API from '../apiClient';
+import { WebView } from 'react-native-webview';
+import { EmptyState, ErrorState, LoadingState } from '../components/ui/AppUI';
+import { useToast } from '../components/ui/ToastProvider';
+import {
+    getDoctorSharedReports,
+    getPatientReportById,
+    getPreviewType,
+    getReportDataUri,
+    MedicalReport,
+    PreviewType,
+} from '../services/reportsApi';
 
 export default function DoctorReports() {
     const router = useRouter();
-    const [reports, setReports] = useState<any[]>([]);
+    const { showToast } = useToast();
+    const [reports, setReports] = useState<MedicalReport[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [selectedReport, setSelectedReport] = useState<MedicalReport | null>(null);
+    const [previewUri, setPreviewUri] = useState('');
+    const [previewType, setPreviewType] = useState<PreviewType>('other');
+    const [previewOpen, setPreviewOpen] = useState(false);
 
     const fetchReports = async () => {
         try {
             setLoading(true);
-            const res = await API.get('/doctor/shared-reports');
-            setReports(Array.isArray(res.data) ? res.data : []);
-        } catch (err) {
-            console.warn('Error fetching reports:', err);
+            setError('');
+            const rows = await getDoctorSharedReports();
+            setReports(rows);
+        } catch (err: any) {
+            console.warn('Error fetching doctor reports:', err?.response?.status || err?.message);
+            setError(err?.response?.data?.message || 'Unable to load patient reports shared with you.');
         } finally {
             setLoading(false);
         }
@@ -34,15 +52,23 @@ export default function DoctorReports() {
         fetchReports();
     }, []);
 
-    const handleAnalyze = async (fileId: string) => {
+    const openReport = async (report: MedicalReport) => {
         try {
-            Alert.alert('AI Analysis', 'Starting detailed report interpretation...');
-            const res = await API.post('/analyze-report', { fileId });
-            Alert.alert('Analysis Result', res.data.history || 'Analysis complete.');
-        } catch (err) {
-            Alert.alert('Error', 'Analysis engine is temporarily busy.');
+            setSelectedReport(report);
+            const fullReport = await getPatientReportById(report.id);
+            if (!fullReport.fileData) {
+                showToast({ type: 'error', message: 'Report file data is missing.' });
+                return;
+            }
+            setPreviewType(getPreviewType(fullReport.mimeType, fullReport.originalFileName));
+            setPreviewUri(getReportDataUri(fullReport));
+            setPreviewOpen(true);
+        } catch (err: any) {
+            showToast({ type: 'error', message: err?.response?.data?.message || 'Could not preview report.' });
         }
     };
+
+    if (loading) return <LoadingState label="Loading shared patient reports..." />;
 
     return (
         <View style={styles.container}>
@@ -52,43 +78,69 @@ export default function DoctorReports() {
                 </TouchableOpacity>
                 <View style={styles.headerTitleContainer}>
                     <Text style={styles.headerTitle}>Shared Reports</Text>
+                    <Text style={styles.headerSub}>Doctor-visible records assigned to you</Text>
                 </View>
-                <View style={styles.rightBtn}>
+                <TouchableOpacity onPress={fetchReports} style={styles.rightBtn}>
                     <MaterialCommunityIcons name="folder-sync" size={24} color="#1A237E" />
-                </View>
+                </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.scroll}>
-                {loading ? (
-                    <ActivityIndicator size="large" color="#1A237E" style={{ marginTop: 50 }} />
-                ) : reports.length === 0 ? (
-                    <View style={styles.empty}>
-                        <Ionicons name="documents-outline" size={60} color="#ccc" />
-                        <Text style={styles.emptyText}>No patient reports shared with you yet.</Text>
-                    </View>
-                ) : (
-                    reports.map((r, i) => (
-                        <View key={i} style={styles.reportCard}>
-                            <View style={styles.reportInfo}>
-                                <Ionicons name="document-text" size={30} color="#1A237E" />
-                                <View style={{ marginLeft: 15 }}>
-                                    <Text style={styles.fileName}>{r.fileName || 'Medical_Report.pdf'}</Text>
-                                    <Text style={styles.patientName}>By: {r.patientName || 'Anonymous'}</Text>
+            {error ? (
+                <ErrorState title="Unable to load shared reports" subtitle={error} onRetry={fetchReports} />
+            ) : (
+                <ScrollView contentContainerStyle={styles.scroll}>
+                    {reports.length === 0 ? (
+                        <EmptyState
+                            icon="documents-outline"
+                            title="No shared records found"
+                            subtitle="Patients must upload reports with doctor visibility before they appear here."
+                        />
+                    ) : (
+                        reports.map((report) => (
+                            <TouchableOpacity key={report.id} style={styles.reportCard} onPress={() => openReport(report)}>
+                                <View style={styles.reportInfo}>
+                                    <Ionicons name="document-text" size={30} color="#1A237E" />
+                                    <View style={{ marginLeft: 15, flex: 1 }}>
+                                        <Text style={styles.fileName} numberOfLines={1}>{report.title || report.originalFileName}</Text>
+                                        <Text style={styles.patientName}>Category: {report.category || 'other'}</Text>
+                                        <Text style={styles.patientName}>Uploaded: {new Date(report.created_at || report.createdAt || '').toLocaleDateString()}</Text>
+                                    </View>
                                 </View>
-                            </View>
-                            <View style={styles.actions}>
-                                <TouchableOpacity style={styles.btn} onPress={() => Alert.alert('Download', 'Opening secure PDF viewer...')}>
-                                    <Text style={styles.btnText}>View</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.btn, styles.aiBtn]} onPress={() => handleAnalyze(r.fileId)}>
-                                    <Ionicons name="sparkles" size={14} color="#fff" />
-                                    <Text style={[styles.btnText, { color: '#fff', marginLeft: 5 }]}>AI Review</Text>
-                                </TouchableOpacity>
-                            </View>
+                                <View style={styles.actions}>
+                                    <TouchableOpacity style={styles.btn} onPress={() => openReport(report)}>
+                                        <Text style={styles.btnText}>View</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </TouchableOpacity>
+                        ))
+                    )}
+                </ScrollView>
+            )}
+
+            <Modal visible={previewOpen} animationType="slide" onRequestClose={() => setPreviewOpen(false)}>
+                <View style={styles.previewContainer}>
+                    <View style={styles.previewHeader}>
+                        <TouchableOpacity style={styles.previewButton} onPress={() => setPreviewOpen(false)}>
+                            <Ionicons name="arrow-back" size={24} color="#fff" />
+                        </TouchableOpacity>
+                        <View style={{ flex: 1, marginHorizontal: 14 }}>
+                            <Text style={styles.previewTitle} numberOfLines={1}>{selectedReport?.title || 'Patient Report Preview'}</Text>
+                            <Text style={styles.previewSubtitle}>{selectedReport?.category || 'other'}</Text>
                         </View>
-                    ))
-                )}
-            </ScrollView>
+                    </View>
+                    <View style={styles.previewContent}>
+                        {previewType === 'image' && (
+                            <Image source={{ uri: previewUri }} style={styles.previewImage} contentFit="contain" />
+                        )}
+                        {previewType === 'pdf' && (
+                            <WebView source={{ uri: previewUri }} style={styles.previewWebView} originWhitelist={['*']} startInLoadingState />
+                        )}
+                        {previewType === 'other' && (
+                            <EmptyState title="Preview unavailable" subtitle="This report type cannot be previewed inline." icon="document-outline" />
+                        )}
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -100,15 +152,21 @@ const styles = StyleSheet.create({
     rightBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
     headerTitleContainer: { flex: 1, alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A237E' },
+    headerSub: { fontSize: 11, color: '#64748B', marginTop: 2 },
     scroll: { padding: 20 },
-    empty: { alignItems: 'center', marginTop: 100 },
-    emptyText: { color: '#999', marginTop: 15, fontSize: 16 },
     reportCard: { backgroundColor: '#fff', borderRadius: 15, padding: 16, marginBottom: 15, elevation: 3, borderLeftWidth: 4, borderLeftColor: '#1A237E' },
     reportInfo: { flexDirection: 'row', alignItems: 'center' },
     fileName: { fontSize: 15, fontWeight: 'bold', color: '#333' },
     patientName: { fontSize: 12, color: '#666', marginTop: 2 },
     actions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 15 },
     btn: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#1A237E', marginLeft: 10 },
-    aiBtn: { backgroundColor: '#1A237E', flexDirection: 'row', alignItems: 'center' },
-    btnText: { color: '#1A237E', fontWeight: 'bold', fontSize: 12 }
+    btnText: { color: '#1A237E', fontWeight: 'bold', fontSize: 12 },
+    previewContainer: { flex: 1, backgroundColor: '#000' },
+    previewHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 18, paddingHorizontal: 16, backgroundColor: 'rgba(0,0,0,0.84)' },
+    previewButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
+    previewTitle: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
+    previewSubtitle: { color: '#CBD5E1', fontSize: 12, marginTop: 2 },
+    previewContent: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    previewImage: { width: '100%', height: '100%' },
+    previewWebView: { width: '100%', flex: 1, backgroundColor: '#000' },
 });

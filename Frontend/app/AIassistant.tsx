@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Audio } from 'expo-av';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { AssistantHistoryItem, chatWithAssistantLLM } from '../services/huggingFaceService';

@@ -1,4 +1,3 @@
-import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
@@ -7,8 +6,8 @@ import {
   Animated,
   StyleSheet,
 } from 'react-native';
-import API from '../apiClient';
 import * as SecureStore from 'expo-secure-store';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 
 export default function WelcomeScreen() {
@@ -19,18 +18,8 @@ export default function WelcomeScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    let sound: Audio.Sound | null = null;
 
     const boot = async () => {
-      // 🎵 Optional sound
-      Audio.Sound.createAsync(
-        require('../assets/welcome.mp3.mp3')
-      ).then(({ sound: s }) => {
-        sound = s;
-        sound.playAsync();
-      }).catch(err => {
-        console.warn("Audio load failed:", err);
-      });
 
       // 🎬 Animations
       Animated.sequence([
@@ -64,10 +53,10 @@ export default function WelcomeScreen() {
           return;
         }
 
-        // Fetch profile from Node.js backend to verify session
-        const response = await API.get('/auth/profile');
-        const userData = response.data?.profile || response.data?.user || response.data;
-        const role = userData.role;
+        const savedRole = await SecureStore.getItemAsync('userRole');
+        const roleHint = savedRole === 'Doctor' ? 'Doctor' : 'Patient';
+        const userData = await getCurrentProfile(roleHint);
+        const role = userData.role || roleHint;
         await SecureStore.setItemAsync('userRole', role || 'Patient');
         await SecureStore.setItemAsync('userProfile', JSON.stringify({ ...userData, role: role || 'Patient' }));
 
@@ -82,12 +71,6 @@ export default function WelcomeScreen() {
           setTimeout(() => router.replace('/PatientDashboard'), 2000);
         }
       } catch (error: any) {
-        console.error('--- Auth Check Failed:', error.message);
-        if (error.response) {
-          console.log('--- Status:', error.response.status);
-          console.log('--- Server Data:', JSON.stringify(error.response.data));
-        }
-
         if (error.response?.status === 401) {
           await SecureStore.deleteItemAsync('userToken');
           await SecureStore.deleteItemAsync('userRole');
@@ -97,16 +80,13 @@ export default function WelcomeScreen() {
         }
 
         const savedRole = await SecureStore.getItemAsync('userRole');
-        console.warn('--- Backend unavailable; preserving saved session.');
+        console.warn('--- Auth validation unavailable; preserving saved session:', error?.response?.status || error?.message);
         setTimeout(() => router.replace(savedRole === 'Doctor' ? '/DoctorDashboard' : '/PatientDashboard'), 2000);
       }
     };
 
     boot();
-
-    return () => {
-      sound?.unloadAsync();
-    };
+    return undefined;
   }, []);
 
   return (
@@ -158,3 +138,4 @@ const styles = StyleSheet.create({
     color: '#007BFF',
   },
 });
+

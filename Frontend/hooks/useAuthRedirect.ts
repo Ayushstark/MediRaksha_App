@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
-import API from '../apiClient';
 import * as SecureStore from 'expo-secure-store';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 export function useAuthRedirect() {
   const router = useRouter();
@@ -19,10 +19,13 @@ export function useAuthRedirect() {
       }
 
       try {
-        const response = await API.get('/auth/profile');
+        const savedRole = await SecureStore.getItemAsync('userRole');
+        const profile = await getCurrentProfile(savedRole === 'Doctor' ? 'Doctor' : 'Patient');
         if (!isMounted) return;
 
-        const role = response.data.profile?.role || 'Patient';
+        const role = profile.role || savedRole || 'Patient';
+        await SecureStore.setItemAsync('userRole', role);
+        await SecureStore.setItemAsync('userProfile', JSON.stringify(profile));
 
         router.replace(
           role === 'Doctor'

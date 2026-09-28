@@ -46,7 +46,7 @@ apiClient.interceptors.response.use(
                 } as typeof config);
             }
 
-            console.error(`API connection failed after trying: ${attemptedUrls.join(', ')}`);
+            console.warn(`API connection unavailable after trying: ${attemptedUrls.join(', ')}`);
         }
         return Promise.reject(error);
     }

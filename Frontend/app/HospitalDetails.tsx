@@ -9,7 +9,10 @@ import {
   Linking,
   Alert,
   ActivityIndicator,
+  Modal,
+  TextInput,
 } from 'react-native';
+import { fetchReviews, submitReview, Review } from '../services/reviewService';
 import {
   getHospitalByPlaceId,
   getHospitalAvailability,
@@ -37,6 +40,15 @@ export default function HospitalDetails() {
   const [availability, setAvailability] = useState<HospitalAvailability | null>(null);
   const [loadingBeds, setLoadingBeds] = useState(true);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
+
+  // Community Reviews & Ratings State
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [newRating, setNewRating] = useState(5);
+  const [newComment, setNewComment] = useState('');
+  const [newAuthor, setNewAuthor] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
   console.log('=== HospitalDetails mounted ===');
   console.log('hospital object:', JSON.stringify(hospital));
   console.log('hospital.id:', hospital?.id);
@@ -87,6 +99,40 @@ export default function HospitalDetails() {
       .then(setDoctors)
       .catch(() => setDoctors([]));
   }, [hospital?.name, hospital?.speciality]);
+
+  useEffect(() => {
+    const hospId = hospital?.id || hospital?.place_id || hospital?.properties?.place_id || hospital?.name;
+    if (!hospId) return;
+    fetchReviews('hospital', hospId)
+      .then(setReviews)
+      .catch((e) => console.warn('Failed to load hospital reviews:', e))
+      .finally(() => setLoadingReviews(false));
+  }, [hospital]);
+
+  const handleAddHospitalReview = async () => {
+    const hospId = hospital?.id || hospital?.place_id || hospital?.properties?.place_id || hospital?.name;
+    if (!hospId) return;
+    try {
+      setSubmittingReview(true);
+      const created = await submitReview({
+        entityType: 'hospital',
+        entityId: hospId,
+        rating: newRating,
+        reviewText: newComment.trim() || undefined,
+        authorName: newAuthor.trim() || 'Patient',
+      });
+      if (created) {
+        setReviews((prev) => [created, ...prev]);
+        setReviewModalOpen(false);
+        setNewComment('');
+        Alert.alert('Review Submitted', 'Thank you for rating this healthcare facility.');
+      }
+    } catch (e: any) {
+      Alert.alert('Submission Error', e.message || 'Could not submit review');
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
 
   if (!hospital || !userLocation) {
     return (
@@ -439,6 +485,63 @@ export default function HospitalDetails() {
           </View>
         )}
 
+        {/* Community Reviews & Ratings Section */}
+        <View style={styles.reviewsSection}>
+          <View style={styles.reviewsHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="star" size={20} color="#F59E0B" />
+              <Text style={styles.reviewsTitle}>Community Reviews & Ratings</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.writeReviewBtn}
+              onPress={() => setReviewModalOpen(true)}
+            >
+              <Feather name="edit-3" size={14} color="#1A237E" />
+              <Text style={styles.writeReviewBtnText}>Rate Hospital</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loadingReviews ? (
+            <ActivityIndicator size="small" color="#1A237E" style={{ marginTop: 12 }} />
+          ) : reviews.length === 0 ? (
+            <Text style={styles.noReviewsText}>
+              No reviews recorded for this hospital yet. Share your feedback to assist fellow patients.
+            </Text>
+          ) : (
+            <View style={styles.reviewsList}>
+              {reviews.map((r) => (
+                <View key={r.id} style={styles.reviewCard}>
+                  <View style={styles.reviewCardHeader}>
+                    <Text style={styles.reviewAuthorName}>{r.authorName || 'Verified Visitor'}</Text>
+                    <View style={styles.reviewStarRow}>
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Ionicons
+                          key={star}
+                          name={star <= r.rating ? 'star' : 'star-outline'}
+                          size={13}
+                          color="#F59E0B"
+                        />
+                      ))}
+                    </View>
+                  </View>
+                  {r.reviewText ? (
+                    <Text style={styles.reviewComment}>{r.reviewText}</Text>
+                  ) : null}
+                  {r.created_at && (
+                    <Text style={styles.reviewTimestamp}>
+                      {new Date(r.created_at).toLocaleDateString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      })}
+                    </Text>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
         {/* Additional Info */}
         <View style={styles.infoNote}>
           <Feather name="info" size={16} color="#666" />
@@ -447,6 +550,69 @@ export default function HospitalDetails() {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Review Submission Modal */}
+      <Modal
+        visible={reviewModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReviewModalOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalHeadTitle}>Rate {hospital.name}</Text>
+              <TouchableOpacity onPress={() => setReviewModalOpen(false)}>
+                <Feather name="x" size={20} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalStarLabel}>Select Your Rating</Text>
+            <View style={styles.modalStarRow}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity key={star} onPress={() => setNewRating(star)}>
+                  <Ionicons
+                    name={star <= newRating ? 'star' : 'star-outline'}
+                    size={34}
+                    color="#F59E0B"
+                    style={{ marginHorizontal: 4 }}
+                  />
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TextInput
+              style={styles.modalTextInput}
+              placeholder="Describe hospital cleanliness, bed availability, staff care (optional)..."
+              placeholderTextColor="#94A3B8"
+              multiline
+              numberOfLines={3}
+              value={newComment}
+              onChangeText={setNewComment}
+            />
+
+            <TextInput
+              style={[styles.modalTextInput, { height: 44, marginTop: 10 }]}
+              placeholder="Your Name (defaults to Patient)"
+              placeholderTextColor="#94A3B8"
+              value={newAuthor}
+              onChangeText={setNewAuthor}
+            />
+
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity
+                style={[styles.modalSubmitBtn, submittingReview && { opacity: 0.6 }]}
+                onPress={handleAddHospitalReview}
+                disabled={submittingReview}
+              >
+                <Text style={styles.modalSubmitBtnText}>
+                  {submittingReview ? 'Submitting...' : 'Submit Review'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -868,4 +1034,140 @@ const styles = StyleSheet.create({
   drInfo: { flex: 1 },
   drName: { fontSize: 16, fontWeight: 'bold', color: '#1A237E' },
   drDegree: { fontSize: 12, color: '#4CAF50' },
+  reviewsSection: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+  },
+  reviewsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  reviewsTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginLeft: 8,
+  },
+  writeReviewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  writeReviewBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1A237E',
+    marginLeft: 4,
+  },
+  noReviewsText: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  reviewsList: {
+    marginTop: 6,
+    gap: 10,
+  },
+  reviewCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  reviewCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  reviewAuthorName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  reviewStarRow: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  reviewComment: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 18,
+    marginTop: 6,
+    fontWeight: '500',
+  },
+  reviewTimestamp: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalHeadTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0F172A',
+    flex: 1,
+  },
+  modalStarLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  modalStarRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  modalTextInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    color: '#0F172A',
+    fontSize: 14,
+    textAlignVertical: 'top',
+  },
+  modalBtnRow: {
+    marginTop: 16,
+  },
+  modalSubmitBtn: {
+    backgroundColor: '#1A237E',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  modalSubmitBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
 });

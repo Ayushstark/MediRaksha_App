@@ -18,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import API from '../apiClient';
 import * as SecureStore from 'expo-secure-store';
 import { getCurrentProfile, getDoctorAppointments, getDoctorPatients } from '../services/medirakshaApi';
+import { scheduleAppointmentReminders } from '../services/appointmentReminders';
 
 type Appointment = {
   _id: string;
@@ -67,10 +68,19 @@ export default function DoctorDashboard() {
 
       setProfile(profileRes);
       setAppointments(Array.isArray(appRes) ? appRes : []);
+      await scheduleAppointmentReminders(
+        (Array.isArray(appRes) ? appRes : [])
+          .filter((appointment: any) => !['cancelled', 'completed'].includes(appointment.status))
+          .map((appointment: any) => ({
+            ...appointment,
+            patientName: appointment.patient?.name || appointment.patientName,
+          })),
+        'doctor'
+      );
       setPatientsCount(Array.isArray(patientRes) ? patientRes.length : 0);
       setReviews(reviewRes.data || { averageRating: 0, count: 0, reviews: [] });
     } catch (error: any) {
-      console.error('Dashboard error:', error);
+      console.warn('Dashboard unavailable:', error?.response?.status || error?.message);
       if (error.response?.status === 401) {
         router.replace('/Login');
       } else {
@@ -89,7 +99,7 @@ export default function DoctorDashboard() {
     const today = new Date().toDateString();
     return appointments
       .filter((a) => a.status !== 'cancelled' && a.status !== 'completed')
-      .filter((a) => new Date(a.appointmentDate || a.date || '').toDateString() === today)
+      .filter((a) => new Date(`${a.appointmentDate || a.date || ''}T00:00:00`).toDateString() === today)
       .sort((a, b) => (a.slotTime || a.startTime || '').localeCompare(b.slotTime || b.startTime || ''));
   }, [appointments]);
 
@@ -129,7 +139,7 @@ export default function DoctorDashboard() {
           onPress: async () => {
             setCompletingId(appointment._id);
             try {
-              await API.patch(`/doctor/meetings/${appointment._id}/status`, {
+              await API.patch(`/doctor/meetings/${appointment._id}/complete`, {
                 status: 'completed',
                 reportIds: reports.map((report) => report._id),
               });

@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import API from '../apiClient';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getDoctorAppointments } from '../services/medirakshaApi';
+import { scheduleAppointmentReminders, scheduleAppointmentReminder } from '../services/appointmentReminders';
 
 interface Appointment {
     _id: string;
@@ -25,7 +26,7 @@ interface Appointment {
     date: string;
     startTime: string;
     reason?: string;
-    status: 'pending' | 'confirmed' | 'cancelled';
+    status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
 }
 
 const FILTERS = ['all', 'pending', 'confirmed', 'cancelled'];
@@ -41,6 +42,15 @@ export default function MeetingRequests() {
         try {
             const response = await getDoctorAppointments();
             setMeetings(response || []);
+            await scheduleAppointmentReminders(
+                (response || [])
+                    .filter((appointment: any) => !['cancelled', 'completed'].includes(appointment.status))
+                    .map((appointment: any) => ({
+                        ...appointment,
+                        patientName: appointment.patient?.name,
+                    })),
+                'doctor'
+            );
         } catch (error) {
             console.error('Error fetching appointments:', error);
         } finally {
@@ -57,12 +67,33 @@ export default function MeetingRequests() {
         try {
             if (status === 'cancelled') {
                 await API.delete(`/doctor/meetings/${id}`);
+            } else if (status === 'confirmed') {
+                await API.patch(`/doctor/meetings/${id}/confirm`);
+            } else if (status === 'completed') {
+                await API.patch(`/doctor/meetings/${id}/complete`);
             } else {
-                await API.patch(`/doctor/meetings/${id}/status`, { status });
+                await API.patch(`/doctor/meetings/${id}/${status}`);
             }
-            setMeetings(prev => prev.map(m => m._id === id ? { ...m, status: status as any } : m));
+            const target = meetings.find(m => m._id === id);
+            const updatedStatus = status as Appointment['status'];
+            setMeetings(prev => prev.map(m => m._id === id ? { ...m, status: updatedStatus } : m));
+            if (updatedStatus === 'confirmed' && target) {
+                await scheduleAppointmentReminder({
+                    id: target._id,
+                    role: 'doctor',
+                    appointmentDate: target.date,
+                    slotTime: target.startTime,
+                    patientName: target.patient?.name,
+                });
+            }
         } catch (error: any) {
-            Alert.alert('Error', error.response?.data?.msg || 'Action failed');
+            Alert.alert(
+                'Error',
+                error.response?.data?.message ||
+                error.response?.data?.detail ||
+                error.response?.data?.msg ||
+                'Action failed'
+            );
         } finally {
             setActing(null);
         }

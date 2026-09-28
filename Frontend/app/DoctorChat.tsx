@@ -15,6 +15,8 @@ import {
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import API from '../apiClient';
+import * as SecureStore from 'expo-secure-store';
+import { getCurrentProfile } from '../services/medirakshaApi';
 
 export default function DoctorChat() {
     const [messages, setMessages] = useState<any[]>([]);
@@ -26,8 +28,9 @@ export default function DoctorChat() {
     useEffect(() => {
         const fetchUserAndMessages = async () => {
             try {
-                const response = await API.get('/auth/profile');
-                setUserId(response.data.user._id);
+                const savedRole = await SecureStore.getItemAsync('userRole');
+                const profile = await getCurrentProfile(savedRole === 'Doctor' ? 'Doctor' : 'Patient');
+                setUserId(String(profile.id || profile._id || ''));
 
                 const msgRes = await API.get('/messages');
                 setMessages(msgRes.data);

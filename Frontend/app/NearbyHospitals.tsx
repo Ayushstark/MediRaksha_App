@@ -632,9 +632,19 @@ export default function NearbyHospitals() {
         <Text style={styles.resultsText}>
           {filteredHospitals.length} hospital{filteredHospitals.length !== 1 ? 's' : ''} found
         </Text>
-        <TouchableOpacity onPress={onRefresh}>
-          <Ionicons name="refresh" size={20} color="#1A237E" />
-        </TouchableOpacity>
+        <View style={styles.viewToggle}>
+          <TouchableOpacity style={styles.viewToggleActive}>
+            <Ionicons name="list" size={15} color="#fff" />
+            <Text style={styles.viewToggleActiveText}>List</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.viewToggleButton} onPress={handleMapView}>
+            <Ionicons name="map" size={15} color="#1A237E" />
+            <Text style={styles.viewToggleText}>Map</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onRefresh} style={styles.refreshMini}>
+            <Ionicons name="refresh" size={17} color="#1A237E" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Hospital List */}
@@ -671,6 +681,18 @@ export default function NearbyHospitals() {
                   </Text>
                 </View>
               )}
+              <View style={styles.badgeRow}>
+                <View style={styles.distanceBadge}>
+                  <Ionicons name="navigate" size={12} color="#1A237E" />
+                  <Text style={styles.distanceBadgeText}>{formatDistance(item.distance ?? 0)}</Text>
+                </View>
+                {item.emergency && (
+                  <View style={styles.emergencyChip}>
+                    <MaterialIcons name="emergency" size={12} color="#DC2626" />
+                    <Text style={styles.emergencyChipText}>Emergency</Text>
+                  </View>
+                )}
+              </View>
 
               <View style={styles.detailRow}>
                 <MaterialIcons name="local-hospital" size={14} color="#666" />
@@ -922,6 +944,30 @@ const styles = StyleSheet.create({
     color: '#1A237E',
     marginBottom: 6,
   },
+  viewToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 999,
+    padding: 3,
+  },
+  viewToggleActive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A237E',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  viewToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  viewToggleActiveText: { color: '#fff', fontSize: 12, fontWeight: '900', marginLeft: 4 },
+  viewToggleText: { color: '#1A237E', fontSize: 12, fontWeight: '900', marginLeft: 4 },
+  refreshMini: { paddingHorizontal: 8 },
   partnerBadge: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -938,6 +984,30 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: 5,
   },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  distanceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  distanceBadgeText: { color: '#1A237E', fontSize: 11, fontWeight: '900', marginLeft: 4 },
+  emergencyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  emergencyChipText: { color: '#DC2626', fontSize: 11, fontWeight: '900', marginLeft: 4 },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'center',

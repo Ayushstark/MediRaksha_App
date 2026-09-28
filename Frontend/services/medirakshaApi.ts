@@ -5,6 +5,16 @@ export const toDateString = (value: Date) => {
   return new Date(value.getTime() - offset * 60 * 1000).toISOString().split('T')[0];
 };
 
+export const normalizeTime = (value: any) => String(value ?? '').slice(0, 5);
+
+export const formatAppointmentDateTime = (appointment: any) => {
+  const date = String(appointment.appointmentDate ?? appointment.date ?? '').slice(0, 10);
+  const time = normalizeTime(appointment.slotTime ?? appointment.startTime ?? appointment.time);
+  if (!date && !time) return 'Date/time not set';
+  const dateLabel = date ? new Date(`${date}T00:00:00`).toLocaleDateString() : 'Date not set';
+  return time ? `${dateLabel} at ${time}` : dateLabel;
+};
+
 export const normalizeSpeciality = (value: any) => {
   const text = String(value || '').trim();
   const normalized = text.toLowerCase();
@@ -24,6 +34,11 @@ export const normalizeDoctor = (doctor: any) => ({
   doctorId: String(doctor.id ?? doctor._id ?? ''),
   specialization: normalizeSpeciality(doctor.speciality ?? doctor.specialization),
   specialty: normalizeSpeciality(doctor.speciality ?? doctor.specialization),
+  availableSlots: Array.isArray(doctor.availableSlots)
+    ? doctor.availableSlots.map(normalizeSlot)
+    : Array.isArray(doctor.slots)
+      ? doctor.slots.map(normalizeSlot)
+      : [],
 });
 
 export const normalizePatient = (patient: any) => ({
@@ -37,10 +52,14 @@ export const normalizeAppointment = (appointment: any) => ({
   ...appointment,
   _id: String(appointment.Id ?? appointment.id ?? appointment._id ?? ''),
   id: String(appointment.Id ?? appointment.id ?? appointment._id ?? ''),
-  date: appointment.appointmentDate,
-  startTime: appointment.slotTime,
+  appointmentDate: String(appointment.appointmentDate ?? appointment.date ?? '').slice(0, 10),
+  date: String(appointment.appointmentDate ?? appointment.date ?? '').slice(0, 10),
+  slotTime: normalizeTime(appointment.slotTime ?? appointment.startTime ?? appointment.time),
+  startTime: normalizeTime(appointment.slotTime ?? appointment.startTime ?? appointment.time),
   reason: appointment.reasonOfAppointment,
+  status: appointment.status === 'approved' ? 'confirmed' : appointment.status,
   patient: appointment.patient ?? {
+    id: appointment.patientId ? String(appointment.patientId) : undefined,
     name: appointment.patientName,
     age: appointment.patientAge,
     gender: appointment.patientGender,
@@ -63,7 +82,9 @@ export async function getCurrentProfile(role?: string) {
   const isDoctor = role === 'Doctor';
   const response = await API.get(isDoctor ? '/doctor/info/detail' : '/user/info/detail');
   const data = response.data?.data ?? response.data;
-  return isDoctor ? normalizeDoctor(data) : normalizePatient(data);
+  return isDoctor
+    ? { ...normalizeDoctor(data), role: 'Doctor' }
+    : { ...normalizePatient(data), role: 'Patient' };
 }
 
 export async function getDoctors() {
@@ -95,7 +116,21 @@ export async function getDoctors() {
     }
   });
 
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const doctors = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+  const doctorsWithSlots = await Promise.all(
+    doctors.map(async (doctor) => {
+      try {
+        const availableSlots = await getAvailableSlots(doctor.id, '');
+        return { ...doctor, availableSlots };
+      } catch (error: any) {
+        console.warn(`Could not fetch slots for doctor ${doctor.id}:`, error?.response?.status || error?.message);
+        return { ...doctor, availableSlots: [] };
+      }
+    })
+  );
+
+  return doctorsWithSlots;
 }
 
 export async function getAvailableSlots(doctorId: string, date: string) {
@@ -111,6 +146,10 @@ export async function bookAppointment(payload: {
   appointmentDate?: string;
   reasonOfAppointment?: string;
 }) {
+  await API.get(`/user/doctor/${payload.doctorId}`).catch((error) => {
+    console.warn('Could not register selected doctor before booking:', error?.response?.data?.message || error?.message);
+  });
+
   const response = await API.post('/user/meetings/book', payload);
   const body = response.data ?? {};
   return {
@@ -135,9 +174,55 @@ export async function getDoctorAppointments() {
 }
 
 export async function getDoctorPatients() {
-  const response = await API.get('/doctor/user/my');
-  const patients = response.data?.data ?? response.data ?? [];
-  return Array.isArray(patients) ? patients.map(normalizePatient) : [];
+  const byId = new Map<string, any>();
+
+  try {
+    const response = await API.get('/doctor/user/my');
+    const patients = response.data?.data ?? response.data ?? [];
+    if (Array.isArray(patients)) {
+      patients.map(normalizePatient).forEach((patient) => {
+        if (patient._id) byId.set(patient._id, patient);
+      });
+    }
+  } catch (error: any) {
+    console.warn('Could not fetch registered patients:', error?.response?.status || error?.message);
+  }
+
+  try {
+    const appointments = await getDoctorAppointments();
+    appointments
+      .filter((appointment: any) => ['confirmed', 'completed'].includes(appointment.status))
+      .forEach((appointment: any) => {
+        const patient = appointment.patient ?? {};
+        const patientId = String(patient.id ?? appointment.patientId ?? '');
+        if (!patientId) return;
+        const existing = byId.get(patientId);
+        const appointmentHistory = [
+          ...(existing?.appointments ?? existing?.appointmentHistory ?? []),
+          {
+            id: appointment.id,
+            date: appointment.appointmentDate || appointment.date,
+            slotTime: appointment.slotTime || appointment.startTime,
+            status: appointment.status,
+            reason: appointment.reason || appointment.reasonOfAppointment,
+          },
+        ];
+        byId.set(patientId, normalizePatient({
+          ...(existing ?? {}),
+          id: patientId,
+          name: patient.name || appointment.patientName || existing?.name,
+          email: patient.email || appointment.patientEmail || existing?.email,
+          number: patient.phoneNumber || appointment.patientContact || existing?.number,
+          age: patient.age || appointment.patientAge || existing?.age,
+          gender: patient.gender || appointment.patientGender || existing?.gender,
+          appointmentHistory,
+        }));
+      });
+  } catch (error: any) {
+    console.warn('Could not derive patients from confirmed appointments:', error?.response?.status || error?.message);
+  }
+
+  return [...byId.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 }
 
 export async function getDoctorSlots() {
