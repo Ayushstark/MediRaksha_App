@@ -64,6 +64,7 @@ export default function MedicalReportsScreen() {
   const [category, setCategory] = useState<ReportCategory>('lab');
   const [activeCategory, setActiveCategory] = useState<ReportCategory | 'all'>('all');
   const [visibility, setVisibility] = useState<ReportVisibility>('private');
+  const [searchQuery, setSearchQuery] = useState('');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
   const [selectedReport, setSelectedReport] = useState<MedicalReport | null>(null);
@@ -123,9 +124,24 @@ export default function MedicalReportsScreen() {
   }, [reports]);
 
   const filteredReports = useMemo(() => {
-    if (activeCategory === 'all') return reports;
-    return reports.filter(report => String(report.category).toLowerCase() === activeCategory);
-  }, [activeCategory, reports]);
+    let result = reports;
+    if (activeCategory !== 'all') {
+      result = result.filter(report => String(report.category).toLowerCase() === activeCategory);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter(report =>
+        (report.title && report.title.toLowerCase().includes(q)) ||
+        (report.doctorName && report.doctorName.toLowerCase().includes(q)) ||
+        (report.hospital && report.hospital.toLowerCase().includes(q)) ||
+        (report.specialization && report.specialization.toLowerCase().includes(q)) ||
+        (report.originalFileName && report.originalFileName.toLowerCase().includes(q)) ||
+        (report.tags && report.tags.some(t => t.name && t.name.toLowerCase().includes(q))) ||
+        (report.notes && report.notes.toLowerCase().includes(q))
+      );
+    }
+    return result;
+  }, [activeCategory, reports, searchQuery]);
 
   const validateFile = (file: DocumentPicker.DocumentPickerAsset) => {
     const mimeType = file.mimeType || '';
@@ -427,7 +443,7 @@ export default function MedicalReportsScreen() {
       ) : null}
 
       {workspaceTab === 'overview' ? <>
-      <View style={styles.statsRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
         {categoryCounts.map((cat) => (
           <TouchableOpacity
             key={cat.value}
@@ -439,10 +455,10 @@ export default function MedicalReportsScreen() {
               <Ionicons name={categoryIcon(cat.value) as any} size={18} color={categoryColor(cat.value)} />
             </View>
             <Text style={styles.statCount}>{cat.count}</Text>
-            <Text style={[styles.statLabel, activeCategory === cat.value && styles.statLabelActive]}>{cat.label.split(' ')[0]}</Text>
+            <Text style={[styles.statLabel, activeCategory === cat.value && styles.statLabelActive]} numberOfLines={1}>{cat.label.split(' ')[0]}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       <View style={styles.documentHeader}>
         <View>
@@ -454,6 +470,25 @@ export default function MedicalReportsScreen() {
         <View style={styles.documentCountPill}>
           <Text style={styles.documentCountText}>{filteredReports.length} Files</Text>
         </View>
+      </View>
+
+      <View style={styles.searchBarContainer}>
+        <Ionicons name="search" size={18} color="#64748B" style={{ marginRight: 8 }} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search records by title, doctor, hospital, or tag..."
+          placeholderTextColor="#94A3B8"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+          autoCorrect={false}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Feather name="x-circle" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterTabs}>
@@ -707,8 +742,27 @@ const styles = StyleSheet.create({
   headerSubtitle: { color: 'rgba(255,255,255,0.78)', fontSize: 12, lineHeight: 17, marginTop: 3 },
   headerRight: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
   reportCount: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  workspaceTabs: { paddingHorizontal: 16, paddingVertical: 12, gap: 8, backgroundColor: '#fff' },
-  workspaceTab: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 13, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0' },
+  workspaceTabs: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  workspaceTab: {
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 14,
+    borderRadius: 19,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   workspaceTabActive: { backgroundColor: '#1A237E', borderColor: '#1A237E' },
   workspaceTabText: { color: '#64748B', fontSize: 12, fontWeight: '900' },
   workspaceTabTextActive: { color: '#fff' },
@@ -742,11 +796,26 @@ const styles = StyleSheet.create({
   workspaceModal: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 22, paddingBottom: Platform.OS === 'ios' ? 38 : 22 },
   summaryModalScroll: { flexGrow: 1, justifyContent: 'flex-end' },
   multilineInput: { minHeight: 82, paddingTop: 14, textAlignVertical: 'top' },
-  statsRow: { flexDirection: 'row', backgroundColor: '#fff', marginHorizontal: 16, marginTop: -10, borderRadius: 16, padding: 12, elevation: 4 },
-  statItem: { flex: 1, alignItems: 'center', borderRadius: 14, paddingVertical: 6 },
-  statItemActive: { backgroundColor: '#F8FAFC' },
-  statIcon: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 6 },
-  statCount: { fontSize: 18, fontWeight: 'bold', color: '#1A237E' },
+  statsScroll: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  statItem: {
+    minWidth: 78,
+    alignItems: 'center',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  statItemActive: { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' },
+  statIcon: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center', marginBottom: 4 },
+  statCount: { fontSize: 16, fontWeight: 'bold', color: '#1A237E' },
   statLabel: { fontSize: 11, color: '#666', marginTop: 2 },
   statLabelActive: { color: '#1A237E', fontWeight: '900' },
   documentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginHorizontal: 18, marginTop: 18, marginBottom: 10 },
@@ -815,4 +884,21 @@ const styles = StyleSheet.create({
   previewImage: { width: '100%', height: 620 },
   previewWebView: { width: '100%', flex: 1, backgroundColor: '#000' },
   zoomContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center' },
+  searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A',
+  },
 });

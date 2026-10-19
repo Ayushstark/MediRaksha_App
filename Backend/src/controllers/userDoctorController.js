@@ -38,6 +38,102 @@ export const getMyDoctor = async (req, res) => {
   }
 };
 
+// GET /api/user/doctor/all
+export const getAllDoctors = async (req, res) => {
+  try {
+    const { q, query: term, specialty, hospital, lat, lon, latitude, longitude, radius, nearby } = req.query;
+    const search = (q || term || '').trim();
+    const userLat = parseFloat(lat ?? latitude);
+    const userLon = parseFloat(lon ?? longitude);
+    const hasLocation = Number.isFinite(userLat) && Number.isFinite(userLon);
+    const searchRadius = parseFloat(radius) || null; // in km
+
+    let sql = `
+      SELECT d.id, d.name, d.email, d.number, d.age, d.gender, d.hospital, d.speciality, d.created_at,
+             d.latitude, d.longitude, d.address, d.experience, d.rating,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', s.id,
+                   '_id', s.id,
+                   'bookingDate', TO_CHAR(s."bookingDate", 'YYYY-MM-DD'),
+                   'date', TO_CHAR(s."bookingDate", 'YYYY-MM-DD'),
+                   'slotTime', TO_CHAR(s."slotTime", 'HH24:MI'),
+                   'time', TO_CHAR(s."slotTime", 'HH24:MI'),
+                   'status', s.status
+                 ) ORDER BY s."bookingDate" ASC, s."slotTime" ASC
+               ) FILTER (WHERE s.id IS NOT NULL AND s.status = 'available' AND (s."bookingDate" > CURRENT_DATE OR (s."bookingDate" = CURRENT_DATE AND s."slotTime" >= CURRENT_TIME))),
+               '[]'
+             ) AS "availableSlots"
+      FROM "Doctor" d
+      LEFT JOIN "Slot" s ON d.id = s."doctorId"
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      const pIdx = params.length;
+      sql += ` AND (d.name ILIKE $${pIdx} OR d.hospital ILIKE $${pIdx} OR d.speciality ILIKE $${pIdx} OR COALESCE(d.address, '') ILIKE $${pIdx})`;
+    }
+
+    if (specialty && specialty !== 'All') {
+      params.push(`%${specialty.trim()}%`);
+      sql += ` AND d.speciality ILIKE $${params.length}`;
+    }
+
+    if (hospital) {
+      params.push(`%${hospital.trim()}%`);
+      sql += ` AND d.hospital ILIKE $${params.length}`;
+    }
+
+    sql += ` GROUP BY d.id ORDER BY d.name ASC`;
+
+    const { rows: doctors } = await pool.query(sql, params);
+
+    // Calculate distance and sort if user coordinates are provided
+    const haversineKm = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // Earth radius in km
+      const toRad = deg => (deg * Math.PI) / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    };
+
+    let processedDoctors = doctors.map(doc => {
+      const docLat = parseFloat(doc.latitude);
+      const docLon = parseFloat(doc.longitude);
+      let distance = null;
+      if (hasLocation && Number.isFinite(docLat) && Number.isFinite(docLon)) {
+        distance = parseFloat(haversineKm(userLat, userLon, docLat, docLon).toFixed(2));
+      }
+      return {
+        ...doc,
+        distance,
+      };
+    });
+
+    if (hasLocation && (nearby === 'true' || searchRadius)) {
+      if (searchRadius) {
+        processedDoctors = processedDoctors.filter(d => d.distance === null || d.distance <= searchRadius);
+      }
+      processedDoctors.sort((a, b) => {
+        if (a.distance === null) return 1;
+        if (b.distance === null) return -1;
+        return a.distance - b.distance;
+      });
+    }
+
+    res.status(200).json({ success: true, count: processedDoctors.length, data: processedDoctors });
+  } catch (error) {
+    console.error('getAllDoctors error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 // GET /api/user/doctor/search/:name
 export const getDoctorByName = async (req, res) => {
   const { name } = req.params;
@@ -47,17 +143,14 @@ export const getDoctorByName = async (req, res) => {
   }
 
   try {
-    // FIX 1: { rows } destructuring
-    // FIX 3: Was LIKE ? (MySQL) — pg uses ILIKE $1 for case-insensitive matching
     const { rows: doctors } = await pool.query(
-      `SELECT id, name, email, number, age, gender, hospital, speciality
+      `SELECT id, name, email, number, age, gender, hospital, speciality, latitude, longitude, address, experience, rating
        FROM "Doctor"
-       WHERE name ILIKE $1
+       WHERE name ILIKE $1 OR hospital ILIKE $1 OR speciality ILIKE $1 OR COALESCE(address, '') ILIKE $1
        ORDER BY name ASC`,
       [`%${name.trim()}%`]
     );
 
-    // Empty result is valid (no match) — 200 with empty array, not 404
     res.status(200).json({ success: true, count: doctors.length, data: doctors });
   } catch (error) {
     console.error('getDoctorByName error:', error);
@@ -70,18 +163,13 @@ export const getDoctorById = async (req, res) => {
   const userId = req.user.id;
   const { doctorId } = req.params;
 
-  // FIX 4: isNaN(doctorId) always returns false for UUID strings since they're
-  //         non-numeric — this guard blocked every request with a UUID doctor id.
-  //         Removed: let the DB query fail naturally if the id is malformed,
-  //         or validate as UUID if your schema uses UUIDs.
   if (!doctorId) {
     return res.status(400).json({ success: false, message: 'Doctor ID is required' });
   }
 
   try {
-    // FIX 1 & 2: { rows } + WHERE id (lowercase)
     const { rows: doctors } = await pool.query(
-      `SELECT id, name, email, number, age, gender, hospital, speciality, created_at
+      `SELECT id, name, email, number, age, gender, hospital, speciality, latitude, longitude, address, experience, rating, created_at
        FROM "Doctor"
        WHERE id = $1`,
       [doctorId]

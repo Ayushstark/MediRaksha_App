@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Modal,
+  TextInput,
 } from 'react-native';
 import { Ionicons, FontAwesome5, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -232,6 +233,7 @@ export default function MyBedBookings() {
   const [refreshing, setRefreshing] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'past'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // ─── FETCH ───
   const fetchBookings = useCallback(async (silent = false) => {
@@ -295,8 +297,21 @@ export default function MyBedBookings() {
   const safeBookings = Array.isArray(bookings) ? bookings : [];
 
   const filteredBookings = safeBookings.filter((b) => {
-    if (activeFilter === 'active') return ['pending', 'confirmed'].includes(b.status);
-    if (activeFilter === 'past') return ['cancelled', 'expired', 'checked_in'].includes(b.status);
+    if (activeFilter === 'active' && !['pending', 'confirmed'].includes(b.status)) return false;
+    if (activeFilter === 'past' && !['cancelled', 'expired', 'checked_in'].includes(b.status)) return false;
+
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      const hosp = String(b.hospitalName || '').toLowerCase();
+      const ward = String(b.wardLabel || (b as any).wardType || '').toLowerCase();
+      const patient = String(b.patientName || '').toLowerCase();
+      const contact = String(b.patientContact || '').toLowerCase();
+      const reason = String(b.reason || '').toLowerCase();
+      const id = String(b._id || '').toLowerCase();
+      const matches = hosp.includes(q) || ward.includes(q) || patient.includes(q) || contact.includes(q) || reason.includes(q) || id.includes(q);
+      if (!matches) return false;
+    }
+
     return true;
   });
 
@@ -338,6 +353,25 @@ export default function MyBedBookings() {
         <TouchableOpacity onPress={() => fetchBookings(true)} style={styles.refreshBtn}>
           <Ionicons name="refresh" size={22} color="#1A237E" />
         </TouchableOpacity>
+      </View>
+
+      {/* Search Bar */}
+      <View style={styles.searchBarContainer}>
+        <Ionicons name="search" size={18} color="#64748B" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search by hospital, ward, patient, or ID..."
+          placeholderTextColor="#94A3B8"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          clearButtonMode="while-editing"
+          autoCorrect={false}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Filter Tabs */}
@@ -471,6 +505,27 @@ const styles = StyleSheet.create({
   },
   refreshBtn: {
     padding: 8,
+  },
+  searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A',
   },
 
   // Filter Tabs

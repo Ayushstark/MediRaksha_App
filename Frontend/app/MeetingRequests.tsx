@@ -10,7 +10,7 @@ import {
     ScrollView,
 } from 'react-native';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import API from '../apiClient';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getDoctorAppointments } from '../services/medirakshaApi';
@@ -26,10 +26,10 @@ interface Appointment {
     date: string;
     startTime: string;
     reason?: string;
-    status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
+    status: 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'missed';
 }
 
-const FILTERS = ['all', 'pending', 'confirmed', 'cancelled'];
+const FILTERS = ['all', 'pending', 'confirmed', 'completed', 'missed', 'cancelled'];
 
 export default function MeetingRequests() {
     const router = useRouter();
@@ -58,9 +58,11 @@ export default function MeetingRequests() {
         }
     };
 
-    useEffect(() => {
-        fetchMeetings();
-    }, []);
+    useFocusEffect(
+        React.useCallback(() => {
+            fetchMeetings();
+        }, [])
+    );
 
     const handleAction = async (id: string, status: string) => {
         setActing(id);
@@ -107,6 +109,8 @@ export default function MeetingRequests() {
         const colors: any = {
             pending: ['#F59E0B', '#D97706'],
             confirmed: ['#10B981', '#059669'],
+            completed: ['#3B82F6', '#1D4ED8'],
+            missed: ['#9333EA', '#7E22CE'],
             cancelled: ['#EF4444', '#DC2626'],
         };
         return (
@@ -247,19 +251,22 @@ const styles = StyleSheet.create({
     rightBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
     headerTitleContainer: { flex: 1, alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A237E' },
-    filterSection: { paddingVertical: 15 },
-    filterList: { paddingHorizontal: 20 },
+    filterSection: { paddingVertical: 12 },
+    filterList: { paddingHorizontal: 20, alignItems: 'center', flexDirection: 'row' },
     filterChip: {
-        paddingHorizontal: 18,
-        paddingVertical: 8,
-        borderRadius: 20,
+        height: 36,
+        paddingHorizontal: 16,
+        borderRadius: 18,
         backgroundColor: '#fff',
         marginRight: 10,
         borderWidth: 1,
         borderColor: '#E2E8F0',
+        justifyContent: 'center',
+        alignItems: 'center',
+        flexShrink: 0,
     },
     activeChip: { backgroundColor: '#1A237E', borderColor: '#1A237E' },
-    filterText: { color: '#64748B', fontWeight: '600', fontSize: 13 },
+    filterText: { color: '#64748B', fontWeight: '700', fontSize: 13 },
     activeChipText: { color: '#fff' },
     listContainer: { paddingHorizontal: 20, paddingBottom: 20 },
     card: {

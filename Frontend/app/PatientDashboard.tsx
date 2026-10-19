@@ -4,18 +4,20 @@ import {
   Alert,
   Linking,
   Modal,
+  Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { AntDesign, Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
 import API from '../apiClient';
 import { logout } from '../services/auth';
-import { formatAppointmentDateTime, getCurrentProfile, getPatientAppointments } from '../services/medirakshaApi';
+import { formatAppointmentDateTime, getCurrentProfile, getPatientAppointments, isSlotPassed } from '../services/medirakshaApi';
 import { scheduleAppointmentReminders } from '../services/appointmentReminders';
 
 type DrawerItem = {
@@ -68,18 +70,22 @@ export default function PatientDashboard() {
     }
   }, [router]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData])
+  );
 
   const upcomingAppointments = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     return appointments
-      .filter((appointment: any) => !['cancelled', 'completed'].includes(String(appointment.status || '').toLowerCase()))
+      .filter((appointment: any) => !['cancelled', 'completed', 'missed'].includes(String(appointment.status || '').toLowerCase()))
       .filter((appointment: any) => {
         const date = String(appointment.appointmentDate || appointment.date || '').slice(0, 10);
+        const time = appointment.slotTime || appointment.startTime;
+        if (date && time && isSlotPassed(date, time)) return false;
         if (!date) return true;
         return new Date(`${date}T00:00:00`).getTime() >= today.getTime();
       })
@@ -373,7 +379,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F5F7FB' },
   loadingText: { marginTop: 12, color: '#64748B', fontWeight: '600' },
   hero: {
-    paddingTop: 54,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 16 : 54,
     paddingHorizontal: 22,
     paddingBottom: 34,
     borderBottomLeftRadius: 30,
@@ -557,7 +563,7 @@ const styles = StyleSheet.create({
   },
   tipText: { color: '#047857', lineHeight: 20, marginTop: 5, fontWeight: '600' },
   drawerOverlay: { flex: 1, flexDirection: 'row' },
-  drawerScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.45)' },
+  drawerScrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(15,23,42,0.45)' },
   drawer: {
     width: '82%',
     maxWidth: 360,

@@ -16,6 +16,8 @@ import { signup } from '../services/auth';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import SpecializationPickerModal from '../components/SpecializationPickerModal';
+import { isValidDoctorSpecialization } from '../constants/specializations';
 
 const sexOptions = ['Male', 'Female', 'Other'];
 const roleOptions = ['Patient', 'Doctor'];
@@ -27,7 +29,10 @@ export default function SignupScreen() {
     const [password, setPassword] = useState('');
     const [age, setAge] = useState('');
     const [sex, setSex] = useState('');
-    const [role, setRole] = useState('');
+    const [role, setRole] = useState('Patient');
+    const [speciality, setSpeciality] = useState('');
+    const [hospital, setHospital] = useState('');
+    const [specModalVisible, setSpecModalVisible] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const router = useRouter();
@@ -43,6 +48,17 @@ export default function SignupScreen() {
             return;
         }
 
+        if (role === 'Doctor') {
+            if (!speciality || !isValidDoctorSpecialization(speciality)) {
+                Alert.alert(
+                    'Specialization Required',
+                    'Please select a recognized medical doctor specialization from the list.'
+                );
+                setSpecModalVisible(true);
+                return;
+            }
+        }
+
         try {
             setLoading(true);
 
@@ -54,7 +70,9 @@ export default function SignupScreen() {
                 role,
                 Number(age),
                 sex,
-                phone.trim()
+                phone.trim(),
+                role === 'Doctor' ? speciality : undefined,
+                role === 'Doctor' ? (hospital.trim() || 'General Hospital') : undefined
             );
 
             Alert.alert(
@@ -204,6 +222,56 @@ export default function SignupScreen() {
                             </View>
                         </View>
 
+                        {role === 'Doctor' && (
+                            <>
+                                <View style={styles.inputGroup}>
+                                    <View style={styles.labelRow}>
+                                        <Text style={styles.label}>Medical Specialization *</Text>
+                                        <View style={styles.badgeWrap}>
+                                            <Text style={styles.badgeText}>Verified Medical</Text>
+                                        </View>
+                                    </View>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.dropdownSelector,
+                                            !speciality && styles.dropdownSelectorEmpty,
+                                        ]}
+                                        onPress={() => setSpecModalVisible(true)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <FontAwesome5 name="stethoscope" size={18} color="#1A237E" style={styles.inputIcon} />
+                                        <Text
+                                            style={[
+                                                styles.dropdownValue,
+                                                !speciality && styles.dropdownPlaceholder,
+                                            ]}
+                                            numberOfLines={1}
+                                        >
+                                            {speciality || 'Select doctor specialization...'}
+                                        </Text>
+                                        <Ionicons name="chevron-down" size={20} color="#64748B" />
+                                    </TouchableOpacity>
+                                    <Text style={styles.fieldHint}>
+                                        Select from accredited medical specialties. Free-text entry is restricted.
+                                    </Text>
+                                </View>
+
+                                <View style={styles.inputGroup}>
+                                    <Text style={styles.label}>Hospital / Clinic Name</Text>
+                                    <View style={styles.inputWrapper}>
+                                        <FontAwesome5 name="hospital" size={18} color="#64748B" style={styles.inputIcon} />
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder="e.g. City Care Hospital"
+                                            placeholderTextColor="#94A3B8"
+                                            value={hospital}
+                                            onChangeText={setHospital}
+                                        />
+                                    </View>
+                                </View>
+                            </>
+                        )}
+
                         <TouchableOpacity
                             style={[styles.signupButton, loading && { opacity: 0.7 }]}
                             onPress={handleSignup}
@@ -236,6 +304,13 @@ export default function SignupScreen() {
                     </View>
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            <SpecializationPickerModal
+                visible={specModalVisible}
+                onClose={() => setSpecModalVisible(false)}
+                selectedValue={speciality}
+                onSelect={(item) => setSpeciality(item.value)}
+            />
         </LinearGradient>
     );
 }
@@ -292,4 +367,52 @@ const styles = StyleSheet.create({
     footer: { marginTop: 40, alignItems: 'center' },
     footerText: { fontSize: 11, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 1 },
     footerLine: { width: 30, height: 2, backgroundColor: '#E2E8F0', marginTop: 6 },
+    labelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 4,
+    },
+    badgeWrap: {
+        backgroundColor: '#DCFCE7',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 6,
+    },
+    badgeText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#15803D',
+    },
+    dropdownSelector: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#fff',
+        borderRadius: 14,
+        paddingHorizontal: 16,
+        height: 54,
+        borderWidth: 1.5,
+        borderColor: '#C7D2FE',
+        elevation: 1,
+    },
+    dropdownSelectorEmpty: {
+        borderColor: '#E2E8F0',
+        borderWidth: 1,
+    },
+    dropdownValue: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1A237E',
+    },
+    dropdownPlaceholder: {
+        fontWeight: '400',
+        color: '#94A3B8',
+    },
+    fieldHint: {
+        fontSize: 11,
+        color: '#64748B',
+        marginLeft: 6,
+        marginTop: 2,
+    },
 });

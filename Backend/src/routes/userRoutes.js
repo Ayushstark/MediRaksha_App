@@ -48,6 +48,7 @@ import {
 
 import { 
   getMyDoctor, 
+  getAllDoctors,
   getDoctorByName, 
   getDoctorById, 
   removeRegisteredDoctor 
@@ -194,6 +195,7 @@ router.get('/meetings/slot/:doctorId', getAvailableSlots);
 /* ==========================================
     DOCTOR-USER ASSOCIATION ROUTES
    ========================================== */
+router.get('/doctor/all', getAllDoctors);
 router.get('/doctor/my', getMyDoctor);
 router.get('/doctor/search/:name', getDoctorByName); 
 router.get('/doctor/:doctorId', getDoctorById);

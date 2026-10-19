@@ -110,8 +110,9 @@ export const AppChip = ({
     style={[styles.chip, active && styles.activeChip]}
     onPress={onPress}
     disabled={!onPress}
+    activeOpacity={0.8}
   >
-    <Text style={[styles.chipText, active && styles.activeChipText]}>{label}</Text>
+    <Text style={[styles.chipText, active && styles.activeChipText]} numberOfLines={1}>{label}</Text>
   </TouchableOpacity>
 );
 
@@ -263,13 +264,18 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   chip: {
+    minHeight: 38,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: 999,
+    paddingVertical: 8,
+    borderRadius: 20,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
     marginRight: spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+    alignSelf: 'center',
   },
   activeChip: {
     backgroundColor: colors.primary,
@@ -279,6 +285,8 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontWeight: '800',
     fontSize: 13,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   activeChipText: {
     color: '#fff',

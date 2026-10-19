@@ -1,6 +1,4 @@
-/**
- * Security & Validation Utilities for MediRaksha
- */
+import { validateDoctorSpecialization } from '../constants/specializations.js';
 
 /**
  * Validates password based on security policy:
@@ -164,6 +162,14 @@ export const validateDoctorSignup = (data = {}) => {
     return { isValid: false, message: 'Doctor speciality is required.' };
   }
 
+  const specCheck = validateDoctorSpecialization(speciality);
+  if (!specCheck.isValid) {
+    return {
+      isValid: false,
+      message: 'Invalid doctor specialization. Please choose an approved medical specialty (e.g. General Physician, Cardiologist, Dermatologist, Pediatrics, etc.).'
+    };
+  }
+
   return {
     isValid: true,
     sanitizedData: {
@@ -173,7 +179,7 @@ export const validateDoctorSignup = (data = {}) => {
       age: parsedAge,
       gender,
       hospital: hospital.trim(),
-      speciality: speciality.trim(),
+      speciality: specCheck.canonicalName,
       password,
     },
   };

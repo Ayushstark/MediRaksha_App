@@ -1,15 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Feather, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { AppointmentTimeline } from '../components/ui/DomainCards';
 import { AppChip } from '../components/ui/AppUI';
@@ -21,43 +23,60 @@ export default function UpcomingAppointments() {
   const [loading, setLoading] = useState(true);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    const fetchAppointments = async () => {
-      try {
-        const appRes = await getPatientAppointments();
-        const activeAppointments = appRes.filter((appointment: any) =>
-          !['cancelled', 'completed'].includes(String(appointment.status || '').toLowerCase())
-        );
-        await scheduleAppointmentReminders(activeAppointments, 'patient');
-        setAppointments(appRes);
-      } catch (error: any) {
-        console.warn('Upcoming appointments unavailable:', error?.response?.status || error?.message);
-        Alert.alert('Unable to Load', 'Could not fetch your upcoming appointments right now.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAppointments();
+  const fetchAppointments = useCallback(async () => {
+    try {
+      const appRes = await getPatientAppointments();
+      const activeAppointments = appRes.filter((appointment: any) =>
+        !['cancelled', 'completed', 'missed'].includes(String(appointment.status || '').toLowerCase())
+      );
+      await scheduleAppointmentReminders(activeAppointments, 'patient');
+      setAppointments(appRes);
+    } catch (error: any) {
+      console.warn('Upcoming appointments unavailable:', error?.response?.status || error?.message);
+      Alert.alert('Unable to Load', 'Could not fetch your upcoming appointments right now.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchAppointments();
+    }, [fetchAppointments])
+  );
 
   const sortedAppointments = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const q = searchQuery.trim().toLowerCase();
+
     return appointments
       .filter((appointment: any) => {
-        if (statusFilter !== 'all' && String(appointment.status || '').toLowerCase() !== statusFilter) return false;
+        const st = String(appointment.status || '').toLowerCase();
+        if (statusFilter !== 'all' && st !== statusFilter) return false;
+
+        if (q) {
+          const docName = String(appointment.doctorName || appointment.doctor?.name || '').toLowerCase();
+          const spec = String(appointment.doctorSpeciality || appointment.speciality || appointment.specialization || '').toLowerCase();
+          const reason = String(appointment.reason || appointment.reasonOfAppointment || '').toLowerCase();
+          const hosp = String(appointment.hospital || appointment.hospitalName || '').toLowerCase();
+          const matches = docName.includes(q) || spec.includes(q) || reason.includes(q) || hosp.includes(q);
+          if (!matches) return false;
+        }
+
         const date = String(appointment.appointmentDate || appointment.date || '').slice(0, 10);
         if (!date) return true;
+        if (['completed', 'missed', 'cancelled'].includes(st)) return true;
         return new Date(`${date}T00:00:00`).getTime() >= today.getTime();
       })
       .sort((a: any, b: any) =>
         `${a.appointmentDate || a.date || ''} ${a.slotTime || a.startTime || ''}`
           .localeCompare(`${b.appointmentDate || b.date || ''} ${b.slotTime || b.startTime || ''}`)
       );
-  }, [appointments, statusFilter]);
+  }, [appointments, statusFilter, searchQuery]);
 
   if (loading) {
     return (
@@ -79,8 +98,27 @@ export default function UpcomingAppointments() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={styles.contentContainer} showsVerticalScrollIndicator={false}>
+        <View style={styles.searchBar}>
+          <Feather name="search" size={18} color="#64748B" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search doctor, speciality, hospital..."
+            placeholderTextColor="#94A3B8"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+            autoCorrect={false}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Feather name="x-circle" size={18} color="#94A3B8" />
+            </TouchableOpacity>
+          )}
+        </View>
+
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-          {['all', 'pending', 'confirmed', 'completed', 'cancelled'].map((status) => (
+          {['all', 'pending', 'confirmed', 'completed', 'missed', 'cancelled'].map((status) => (
             <AppChip
               key={status}
               label={status.charAt(0).toUpperCase() + status.slice(1)}
@@ -182,6 +220,25 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#fff', fontSize: 28, fontWeight: '900', marginTop: 22 },
   headerSub: { color: 'rgba(255,255,255,0.8)', fontSize: 14, lineHeight: 20, marginTop: 6 },
   contentContainer: { padding: 20, paddingBottom: 34 },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 14,
+    paddingVertical: Platform.OS === 'ios' ? 12 : 8,
+    marginBottom: 14,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A',
+  },
   filterRow: { paddingBottom: 16 },
   timelineTitle: { color: '#0F172A', fontSize: 18, fontWeight: '900', marginBottom: 8 },
   emptyCard: {

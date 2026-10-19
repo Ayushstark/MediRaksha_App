@@ -13,11 +13,16 @@ export default async function seed() {
                 END IF;
                 
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'appointment_status_enum') THEN
-                    CREATE TYPE appointment_status_enum AS ENUM ('pending', 'confirmed', 'cancelled', 'completed');
+                    CREATE TYPE appointment_status_enum AS ENUM ('pending', 'confirmed', 'cancelled', 'completed', 'missed');
+                ELSE
+                    ALTER TYPE appointment_status_enum ADD VALUE IF NOT EXISTS 'missed';
                 END IF;
                 
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'slot_status_enum') THEN
-                    CREATE TYPE slot_status_enum AS ENUM ('available', 'booked', 'blocked');
+                    CREATE TYPE slot_status_enum AS ENUM ('available', 'booked', 'blocked', 'completed', 'missed');
+                ELSE
+                    ALTER TYPE slot_status_enum ADD VALUE IF NOT EXISTS 'completed';
+                    ALTER TYPE slot_status_enum ADD VALUE IF NOT EXISTS 'missed';
                 END IF;
                 
                 IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'report_category_enum') THEN
@@ -39,10 +44,20 @@ export default async function seed() {
                 "gender" gender_enum,
                 "hospital" VARCHAR,
                 "speciality" VARCHAR,
+                "latitude" NUMERIC(10, 7),
+                "longitude" NUMERIC(10, 7),
+                "address" TEXT,
+                "experience" INTEGER DEFAULT 8,
+                "rating" NUMERIC(3, 2) DEFAULT 4.8,
                 "password" VARCHAR NOT NULL,
                 "created_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 "updated_at" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE "Doctor" ADD COLUMN IF NOT EXISTS "latitude" NUMERIC(10, 7);
+            ALTER TABLE "Doctor" ADD COLUMN IF NOT EXISTS "longitude" NUMERIC(10, 7);
+            ALTER TABLE "Doctor" ADD COLUMN IF NOT EXISTS "address" TEXT;
+            ALTER TABLE "Doctor" ADD COLUMN IF NOT EXISTS "experience" INTEGER DEFAULT 8;
+            ALTER TABLE "Doctor" ADD COLUMN IF NOT EXISTS "rating" NUMERIC(3, 2) DEFAULT 4.8;
 
             -- User Table
             CREATE TABLE IF NOT EXISTS "User" (
@@ -420,17 +435,125 @@ export default async function seed() {
                     symtom: "Burning retrosternal chest pain after eating, sour taste/acid regurgitation, chronic throat clearing, dysphagia",
                     solution: "Avoid lying down within 3 hours after meals, elevate head of bed, avoid trigger foods (acidic, fried, caffeine), antacids or PPIs.",
                     description: "A common digestive disease where stomach acid persistently flows back into the food pipe (esophagus), irritating the esophageal lining."
+                },
+                {
+                    code: 106,
+                    name: "Breast Cancer",
+                    common_name: "Breast Neoplasm / Carcinoma",
+                    category: "Oncology",
+                    risk_level: "High",
+                    transmission: "Non-communicable (Genetic mutations, BRCA1/2, hormonal factors)",
+                    symtom: "Painless breast lump or thickening, skin dimpling, nipple inversion, nipple discharge, localized swelling or redness",
+                    solution: "Early screening via mammography, surgical resection, chemotherapy, radiation therapy, hormone receptor targeted therapies.",
+                    description: "Malignant cellular proliferation originating in breast tissue, most commonly inside milk ducts (ductal carcinoma) or lobules. Early detection significantly improves 5-year survival rates."
+                },
+                {
+                    code: 107,
+                    name: "Bronchial Asthma",
+                    common_name: "Asthma",
+                    category: "Chronic",
+                    risk_level: "Medium",
+                    transmission: "Non-communicable (Airway hyper-reactivity, environmental allergens)",
+                    symtom: "Wheezing, episodic shortness of breath, chest tightness, nocturnal dry cough",
+                    solution: "Inhaled corticosteroids (budesonide/fluticasone), short-acting bronchodilators (salbutamol) for rescue, avoiding dust/smoke triggers.",
+                    description: "A chronic inflammatory disorder of the airways causing reversible bronchospasm, mucus hypersecretion, and airflow obstruction."
+                },
+                {
+                    code: 108,
+                    name: "COVID-19 (SARS-CoV-2)",
+                    common_name: "Coronavirus Disease",
+                    category: "Infectious",
+                    risk_level: "Medium",
+                    transmission: "Airborne aerosols and respiratory droplets",
+                    symtom: "Fever, dry cough, fatigue, loss of taste or smell, sore throat, oxygen desaturation in severe cases",
+                    solution: "Isolation, pulse oximetry monitoring, oral hydration, antipyretics, Paxlovid or monoclonal antibodies if high-risk, vaccination.",
+                    description: "An acute contagious viral respiratory disease caused by the SARS-CoV-2 coronavirus with multisystemic inflammatory potential."
+                },
+                {
+                    code: 109,
+                    name: "Pulmonary Tuberculosis",
+                    common_name: "TB",
+                    category: "Infectious",
+                    risk_level: "High",
+                    transmission: "Airborne inhalation of Mycobacterium tuberculosis bacteria",
+                    symtom: "Chronic cough lasting >3 weeks, hemoptysis (blood in sputum), night sweats, unexplained weight loss, low-grade fever",
+                    solution: "Directly Observed Therapy (DOTS) multi-drug regimen: Isoniazid, Rifampicin, Pyrazinamide, Ethambutol for 6 months.",
+                    description: "A bacterial infection primarily targeting lungs with granuloma formation. Completing the entire antibiotic course is critical to avoid multi-drug resistant strains."
+                },
+                {
+                    code: 110,
+                    name: "Malaria",
+                    common_name: "Plasmodium Infection",
+                    category: "Infectious",
+                    risk_level: "High",
+                    transmission: "Bite of infected female Anopheles mosquitoes",
+                    symtom: "High cyclical fever with rigor and chills, profuse sweating, headache, nausea, anemia, jaundice",
+                    solution: "Artemisinin-based combination therapies (ACT), chloroquine, insect repellent, bed nets, prompt blood smear confirmation.",
+                    description: "A protozoan parasitic disease that infects and ruptures red blood cells, potentially causing cerebral malaria if left untreated."
+                },
+                {
+                    code: 111,
+                    name: "Migraine",
+                    common_name: "Severe Throbbing Headache",
+                    category: "Neurology",
+                    risk_level: "Low",
+                    transmission: "Non-communicable (Neurovascular trigeminal activation)",
+                    symtom: "Unilateral pulsating headache, photophobia, phonophobia, nausea, visual aura",
+                    solution: "Triptans, NSAIDs, dark quiet room rest, hydration, preventive CGRP antagonists or beta-blockers.",
+                    description: "A complex neurovascular disorder characterized by recurrent moderate to severe throbbing headaches lasting 4 to 72 hours."
+                },
+                {
+                    code: 112,
+                    name: "Rheumatoid Arthritis",
+                    common_name: "Inflammatory Joint Disease",
+                    category: "Chronic",
+                    risk_level: "Medium",
+                    transmission: "Autoimmune disorder (Genetic predisposition)",
+                    symtom: "Symmetrical joint pain, morning stiffness >30 minutes, joint swelling in hands/wrists, fatigue",
+                    solution: "DMARDs (Methotrexate), biologic response modifiers, low-impact exercise, joint protection strategies.",
+                    description: "A chronic systemic autoimmune disease causing progressive synovial inflammation, joint erosion, and functional impairment."
+                },
+                {
+                    code: 113,
+                    name: "Hypothyroidism",
+                    common_name: "Underactive Thyroid",
+                    category: "Chronic",
+                    risk_level: "Low",
+                    transmission: "Non-communicable (Autoimmune Hashimoto's / Iodine deficiency)",
+                    symtom: "Weight gain, cold intolerance, fatigue, dry skin, constipation, bradycardia, hair thinning",
+                    solution: "Daily synthetic Levothyroxine (T4) replacement on an empty stomach, periodic TSH level testing.",
+                    description: "A hormonal deficiency resulting from underproduction of thyroid hormones by the thyroid gland, slowing basal metabolism."
+                },
+                {
+                    code: 114,
+                    name: "Renal Calculi (Nephrolithiasis)",
+                    common_name: "Kidney Stones",
+                    category: "Lifestyle",
+                    risk_level: "Medium",
+                    transmission: "Non-communicable (Dehydration, high oxalate / uric acid precipitation)",
+                    symtom: "Severe flank pain radiating to groin (renal colic), hematuria (blood in urine), dysuria, nausea",
+                    solution: "High water intake (>3L/day), pain management (NSAIDs), alpha-blockers for stone passage, lithotripsy for large stones.",
+                    description: "Solid mineral crystalline deposits that form inside the renal pelvis and ureters causing acute obstruction and spasms."
                 }
             ];
 
             for (const d of sampleDiseases) {
                 await pool.query(
                     `INSERT INTO "Disease" (code, name, common_name, category, risk_level, transmission, symtom, solution, description)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (code) DO NOTHING`,
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     ON CONFLICT (code) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        common_name = EXCLUDED.common_name,
+                        category = EXCLUDED.category,
+                        risk_level = EXCLUDED.risk_level,
+                        transmission = EXCLUDED.transmission,
+                        symtom = EXCLUDED.symtom,
+                        solution = EXCLUDED.solution,
+                        description = EXCLUDED.description`,
                     [d.code, d.name, d.common_name, d.category, d.risk_level, d.transmission, d.symtom, d.solution, d.description]
                 );
             }
-            console.log("Sample diseases seeded successfully.");
+            console.log("Comprehensive diseases seeded successfully.");
         }
 
     } catch (e) {

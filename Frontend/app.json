@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "mediraksha10",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -16,8 +15,7 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true
+      }
     },
     "web": {
       "bundler": "metro",
@@ -46,7 +44,9 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-image",
+      "expo-status-bar"
     ],
     "extra": {
       "GOOGLE_MAPS_API_KEY": ""

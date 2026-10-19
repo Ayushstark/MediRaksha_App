@@ -44,21 +44,27 @@ export const updateUserProfile = async (req, res) => {
     const values = [];
     let queryIndex = 1;
 
-    if (name !== undefined) {
+    if (name !== undefined && name !== null && name !== '') {
       fieldsToUpdate.push(`"name" = $${queryIndex++}`);
-      values.push(name);
+      values.push(String(name).trim());
     }
-    if (number !== undefined) {
+    if (number !== undefined && number !== null) {
       fieldsToUpdate.push(`"number" = $${queryIndex++}`);
-      values.push(number);
+      values.push(String(number).trim());
     }
-    if (age !== undefined) {
-      fieldsToUpdate.push(`"age" = $${queryIndex++}`);
-      values.push(age);
+    if (age !== undefined && age !== null && age !== '') {
+      const parsedAge = Number(age);
+      if (!isNaN(parsedAge) && parsedAge > 0) {
+        fieldsToUpdate.push(`"age" = $${queryIndex++}`);
+        values.push(parsedAge);
+      }
     }
-    if (gender !== undefined) {
+    if (gender !== undefined && gender !== null && gender !== '') {
+      let normalizedGender = String(gender).trim().toLowerCase();
+      if (normalizedGender === 'third gender') normalizedGender = 'other';
+      if (!['male', 'female', 'other'].includes(normalizedGender)) normalizedGender = 'other';
       fieldsToUpdate.push(`"gender" = $${queryIndex++}`);
-      values.push(gender);
+      values.push(normalizedGender);
     }
     if (registeredDoctorId !== undefined) {
       fieldsToUpdate.push(`"registeredDoctorId" = $${queryIndex++}`);

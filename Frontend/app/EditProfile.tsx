@@ -18,6 +18,7 @@ import { AppButton, AppHeader } from '../components/ui/AppUI';
 import { useToast } from '../components/ui/ToastProvider';
 import { colors, radius, shadows, spacing } from '../constants/theme';
 import { getCurrentProfile } from '../services/medirakshaApi';
+import { updateStoredProfile } from '../services/auth';
 
 const sexOptions = ['Male', 'Female', 'Third Gender'];
 const roleOptions = ['Patient', 'Doctor'];
@@ -48,7 +49,10 @@ export default function ProfileEditScreen() {
           setName(userData.name || '');
           setEmail(userData.email || userData.doctorId || '');
           setAge(userData.age ? String(userData.age) : '');
-          setSex(userData.gender || '');
+          const rawGender = String(userData.gender || '').toLowerCase();
+          const formattedGender =
+            rawGender === 'female' ? 'Female' : rawGender === 'other' ? 'Third Gender' : rawGender === 'male' ? 'Male' : '';
+          setSex(formattedGender);
           setPhone(userData.phoneNumber || userData.number || '');
         }
       } catch {
@@ -63,24 +67,49 @@ export default function ProfileEditScreen() {
   }, [router]);
 
   const handleSave = async () => {
-    if (!name.trim() || !sex.trim()) {
-      Alert.alert('Validation Error', 'Please fill in all required fields.');
+    if (!name.trim()) {
+      Alert.alert('Validation Error', 'Please enter your name.');
       return;
     }
 
     try {
       setSaving(true);
-      await API.patch('/user/info/update', {
+      const cleanSex = sex.trim().toLowerCase();
+      const normalizedGender = cleanSex === 'third gender' ? 'other' : cleanSex || 'other';
+      const parsedAge = parseInt(age, 10);
+      const payload: any = {
         name: name.trim(),
-        gender: sex.trim(),
-        age: Number(age),
-        number: phone.trim()
+        gender: normalizedGender,
+        number: phone.trim(),
+      };
+      if (!isNaN(parsedAge) && parsedAge > 0) {
+        payload.age = parsedAge;
+      }
+
+      await API.patch('/user/info/update', payload);
+
+      // Update SecureStore profile cache so session is immediately up to date
+      await updateStoredProfile({
+        name: payload.name,
+        gender: payload.gender,
+        age: payload.age,
+        number: payload.number,
+        phoneNumber: payload.number,
       });
 
       showToast({ type: 'success', message: 'Profile updated successfully' });
-      router.replace(role === 'Doctor' ? '/DoctorDashboard' : '/PatientDashboard');
+
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace(role === 'Doctor' ? '/DoctorDashboard' : '/PatientDashboard');
+      }
     } catch (error: any) {
-      showToast({ type: 'error', message: error.response?.data?.msg || error.message || 'Failed to update profile' });
+      console.error('Update profile error:', error);
+      showToast({
+        type: 'error',
+        message: error.response?.data?.message || error.response?.data?.msg || 'Failed to update profile',
+      });
     } finally {
       setSaving(false);
     }

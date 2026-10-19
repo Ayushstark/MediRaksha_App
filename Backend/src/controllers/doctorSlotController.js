@@ -1,6 +1,6 @@
 import { pool } from '../config/db.js';
 
-const VALID_SLOT_STATUSES = new Set(['available', 'booked', 'blocked']);
+const VALID_SLOT_STATUSES = new Set(['available', 'booked', 'blocked', 'completed', 'missed']);
 const VALID_WEEK_DAYS = new Set([0, 1, 2, 3, 4, 5, 6]);
 const DEFAULT_SLOT_DURATION_MINUTES = 60;
 const MAX_GENERATED_SLOTS = 500;
@@ -13,6 +13,31 @@ const normalizeDate = (value) => {
 };
 
 const isValidTime = (value) => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+
+const parseTimeTo24H = (value) => {
+  if (typeof value !== 'string') return null;
+  const str = value.trim();
+  const match24 = str.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  if (match24) {
+    const hours = parseInt(match24[1], 10).toString().padStart(2, '0');
+    return `${hours}:${match24[2]}`;
+  }
+  const match12 = str.match(/^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/i);
+  if (match12) {
+    let hours = parseInt(match12[1], 10);
+    const minutes = match12[2];
+    const ampm = match12[3].toUpperCase();
+    if (hours < 1 || hours > 12) return null;
+    if (ampm === 'PM' && hours < 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return `${hours.toString().padStart(2, '0')}:${minutes}`;
+  }
+  if (str.includes('-')) {
+    const startPart = str.split('-')[0].trim();
+    return parseTimeTo24H(startPart);
+  }
+  return null;
+};
 
 const timeToMinutes = (value) => {
   const [hours, minutes] = value.split(':').map(Number);
@@ -33,13 +58,54 @@ const addDays = (date, days) => {
 
 const formatDate = (date) => date.toISOString().split('T')[0];
 
-const buildSlotRequests = ({ bookingDate, slotTime, startDate, endDate, weeklyRules, slotDurationMinutes }) => {
+const buildSlotRequests = ({ bookingDate, slotTime, startTime, endTime, startDate, endDate, weeklyRules, slotDurationMinutes }) => {
   if (bookingDate) {
     const normalizedDate = normalizeDate(bookingDate);
-    const normalizedTime = slotTime || '09:00';
+    if (!normalizedDate) {
+      return { error: 'bookingDate must be a valid date.' };
+    }
 
-    if (!normalizedDate || !isValidTime(normalizedTime)) {
-      return { error: 'bookingDate and slotTime must be valid.' };
+    const effectiveStart = startTime || slotTime;
+    const effectiveEnd = endTime;
+
+    if (effectiveStart && effectiveEnd) {
+      const parsedStart = parseTimeTo24H(effectiveStart);
+      const parsedEnd = parseTimeTo24H(effectiveEnd);
+
+      if (!parsedStart || !parsedEnd) {
+        return { error: 'Start time and end time must be valid (HH:MM or HH:MM AM/PM).' };
+      }
+
+      const startMin = timeToMinutes(parsedStart);
+      const endMin = timeToMinutes(parsedEnd);
+
+      if (endMin <= startMin) {
+        return { error: 'End time must be after start time.' };
+      }
+
+      const duration = Number(slotDurationMinutes || (endMin - startMin));
+      const validDuration = Number.isInteger(duration) && duration >= 15 ? duration : (endMin - startMin);
+
+      const generated = [];
+      for (let min = startMin; min + validDuration <= endMin; min += validDuration) {
+        generated.push({ bookingDate: normalizedDate, slotTime: minutesToTime(min) });
+        if (generated.length > MAX_GENERATED_SLOTS) {
+          return { error: `Too many slots generated. Limit is ${MAX_GENERATED_SLOTS}.` };
+        }
+      }
+
+      if (generated.length === 0) {
+        generated.push({ bookingDate: normalizedDate, slotTime: parsedStart });
+      }
+
+      return { slots: generated };
+    }
+
+    const parsedTime = parseTimeTo24H(slotTime || startTime);
+    const normalizedTime = parsedTime || (isValidTime(slotTime || startTime) ? (slotTime || startTime) : '09:00');
+
+    if (!isValidTime(normalizedTime)) {
+      return { error: 'A valid slotTime or startTime is required.' };
     }
 
     return { slots: [{ bookingDate: normalizedDate, slotTime: normalizedTime }] };
@@ -107,6 +173,31 @@ export async function getAllSlots(req, res) {
   const { status, fromDate, toDate } = req.query;
 
   try {
+    // Immediately remove passed unbooked slots from the database so they vanish completely
+    await pool.query(
+      `DELETE FROM "Slot"
+       WHERE "doctorId" = $1 AND status = 'available'
+         AND ("bookingDate" < CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time <= CURRENT_TIME))`,
+      [doctorId]
+    );
+
+    // Sync slot status with completed and missed appointments
+    await pool.query(
+      `UPDATE "Slot" s
+       SET status = 'completed', "updated_at" = NOW()
+       FROM "Appointment" a
+       WHERE s.id = a."slotId" AND s."doctorId" = $1 AND a.status = 'completed' AND s.status != 'completed'`,
+      [doctorId]
+    );
+
+    await pool.query(
+      `UPDATE "Slot" s
+       SET status = 'missed', "updated_at" = NOW()
+       FROM "Appointment" a
+       WHERE s.id = a."slotId" AND s."doctorId" = $1 AND a.status = 'missed' AND s.status != 'missed'`,
+      [doctorId]
+    );
+
     const params = [doctorId];
     const conditions = ['"doctorId" = $1'];
 
@@ -116,6 +207,9 @@ export async function getAllSlots(req, res) {
       }
       params.push(status);
       conditions.push(`status = $${params.length}`);
+      if (status === 'available') {
+        conditions.push(`("bookingDate" > CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time > CURRENT_TIME))`);
+      }
     }
 
     if (fromDate) {
@@ -137,7 +231,7 @@ export async function getAllSlots(req, res) {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, "userId", "doctorId", "bookingDate", "slotTime", status, created_at, updated_at
+      `SELECT id, "userId", "doctorId", TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", TO_CHAR("slotTime", 'HH24:MI') AS "slotTime", status, created_at, updated_at
        FROM "Slot"
        WHERE ${conditions.join(' AND ')}
        ORDER BY "bookingDate" ASC, "slotTime" ASC, id ASC`,
@@ -165,7 +259,27 @@ export async function addSlot(req, res) {
     const inserted = [];
     const skipped = [];
 
-    for (const slot of slots) {
+    const now = new Date();
+    const currentDateStr = now.toISOString().split('T')[0];
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    const isSlotInPast = (bDate, sTime) => {
+      if (bDate < currentDateStr) return true;
+      if (bDate > currentDateStr) return false;
+      const [h, m] = sTime.split(':').map(Number);
+      return (h * 60 + m) <= currentMinutes;
+    };
+
+    const futureSlots = slots.filter(slot => !isSlotInPast(slot.bookingDate, slot.slotTime));
+
+    if (futureSlots.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot publish time slots that have already passed.',
+      });
+    }
+
+    for (const slot of futureSlots) {
       const { rows: duplicate } = await pool.query(
         `SELECT id FROM "Slot"
          WHERE "doctorId" = $1 AND "bookingDate" = $2 AND "slotTime" = $3 AND status != 'blocked'`,
@@ -180,7 +294,7 @@ export async function addSlot(req, res) {
       const { rows } = await pool.query(
         `INSERT INTO "Slot" ("doctorId", "bookingDate", "slotTime", status)
          VALUES ($1, $2, $3, 'available')
-         RETURNING id, "userId", "doctorId", "bookingDate", "slotTime", status, created_at, updated_at`,
+         RETURNING id, "userId", "doctorId", TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", TO_CHAR("slotTime", 'HH24:MI') AS "slotTime", status, created_at, updated_at`,
         [doctorId, slot.bookingDate, slot.slotTime]
       );
       inserted.push(rows[0]);
@@ -190,7 +304,7 @@ export async function addSlot(req, res) {
       success: true,
       message: `${inserted.length} slot${inserted.length === 1 ? '' : 's'} published successfully`,
       data: inserted,
-      skippedCount: skipped.length
+      skippedCount: skipped.length + (slots.length - futureSlots.length)
     });
   } catch (error) {
     console.error('addSlot error:', error);

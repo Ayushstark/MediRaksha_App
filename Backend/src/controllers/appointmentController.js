@@ -5,22 +5,36 @@ export const getAllMeetings = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // FIX 6: pg returns { rows } not [rows] — destructure correctly throughout
-    // FIX 7: Fixed column aliasing — "a.Id" quoted the whole string as one identifier;
-    //         correct form is a."columnName" or just the unquoted alias
-    // FIX 8: No more backtick aliases — pg uses standard SQL double-quote identifiers
+    // Automatically mark passed pending or confirmed appointments as 'missed'
+    await pool.query(
+      `UPDATE "Appointment"
+       SET status = 'missed', "updated_at" = NOW()
+       WHERE status IN ('pending', 'confirmed')
+         AND ("appointmentDate" < CURRENT_DATE OR ("appointmentDate" = CURRENT_DATE AND "slotTime"::time <= CURRENT_TIME))`
+    );
+
+    // Also mark linked booked slots as 'missed'
+    await pool.query(
+      `UPDATE "Slot"
+       SET status = 'missed', "updated_at" = NOW()
+       WHERE id IN (
+         SELECT "slotId" FROM "Appointment"
+         WHERE status = 'missed' AND "slotId" IS NOT NULL
+       ) AND status = 'booked'`
+    );
+
     const { rows: appointments } = await pool.query(
       `SELECT 
         a.id,
         TO_CHAR(a."appointmentDate", 'YYYY-MM-DD') AS "appointmentDate",
-        a."slotTime",
+        TO_CHAR(a."slotTime", 'HH24:MI') AS "slotTime",
         a.status,
         a."reasonOfAppointment",
         d.name       AS "doctorName",
         d.speciality AS "speciality",
         d.hospital   AS "hospital",
         TO_CHAR(s."bookingDate", 'YYYY-MM-DD') AS "bookingDate",
-        s."slotTime" AS "availableSlotTime",
+        TO_CHAR(s."slotTime", 'HH24:MI') AS "availableSlotTime",
         s.status     AS "slotStatus"
        FROM "Appointment" a
        JOIN "Doctor" d ON a."doctorId" = d.id
@@ -30,7 +44,6 @@ export const getAllMeetings = async (req, res) => {
       [userId]
     );
 
-    // FIX 13: Empty result is valid (new user has no appointments) — return 200 with []
     return res.status(200).json({ success: true, data: appointments });
 
   } catch (error) {
@@ -50,7 +63,7 @@ export const getMeetingById = async (req, res) => {
       `SELECT 
         a.id,
         TO_CHAR(a."appointmentDate", 'YYYY-MM-DD') AS "appointmentDate",
-        a."slotTime",
+        TO_CHAR(a."slotTime", 'HH24:MI') AS "slotTime",
         a.status,
         a."reasonOfAppointment",
         d.name       AS "doctorName",
@@ -58,7 +71,7 @@ export const getMeetingById = async (req, res) => {
         d.hospital   AS "hospital",
         d.number     AS "doctorContact",
         TO_CHAR(s."bookingDate", 'YYYY-MM-DD') AS "bookingDate",
-        s."slotTime" AS "availableSlotTime",
+        TO_CHAR(s."slotTime", 'HH24:MI') AS "availableSlotTime",
         s.status     AS "slotStatus"
        FROM "Appointment" a
        JOIN "Doctor" d ON a."doctorId" = d.id
@@ -134,17 +147,37 @@ export const bookMeeting = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Lock the slot row to prevent race conditions
+    // Check if the requested slot has already passed
+    const { rows: expiredSlot } = await client.query(
+      `SELECT id, TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", "slotTime" FROM "Slot"
+       WHERE id = $1 AND status = 'available'
+         AND ("bookingDate" < CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time <= CURRENT_TIME))
+       FOR UPDATE`,
+      [slotId]
+    );
+
+    if (expiredSlot.length > 0) {
+      // Instantly remove the passed slot from the database so it vanishes immediately
+      await client.query(`DELETE FROM "Slot" WHERE id = $1 AND status = 'available'`, [slotId]);
+      await client.query('COMMIT');
+      return res.status(400).json({
+        success: false,
+        message: 'This time slot has already passed and can no longer be booked.',
+      });
+    }
+
+    // Lock the slot row to prevent race conditions and ensure it is strictly in the future
     const { rows: slot } = await client.query(
       `SELECT id, status, TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", "slotTime" FROM "Slot"
        WHERE id = $1 AND "doctorId" = $2 AND status = 'available'
+         AND ("bookingDate" > CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time > CURRENT_TIME))
        FOR UPDATE`,
       [slotId, doctorId]
     );
 
     if (slot.length === 0) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ success: false, message: 'Slot is no longer available' });
+      return res.status(409).json({ success: false, message: 'Slot is no longer available or has already passed.' });
     }
 
     const selectedSlot = slot[0];
@@ -222,28 +255,22 @@ export const getAvailableSlots = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Doctor not found' });
     }
 
-    const now = new Date();
-  const currentDate = now.toISOString().split('T')[0];
-  const currentTime = now.toTimeString().slice(0, 5);
+    // Immediately remove passed unbooked slots from the database so they vanish completely
+    await pool.query(
+      `DELETE FROM "Slot"
+       WHERE status = 'available'
+         AND ("bookingDate" < CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time <= CURRENT_TIME))`
+    );
 
-  const isUsingToday = fromDate === currentDate;
-  const queryBase = `
-       SELECT id, TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", "slotTime", status, created_at
+    const { rows: slots } = await pool.query(
+      `SELECT id, TO_CHAR("bookingDate", 'YYYY-MM-DD') AS "bookingDate", TO_CHAR("slotTime", 'HH24:MI') AS "slotTime", status, created_at
        FROM "Slot"
-       WHERE "doctorId" = $1 AND status = 'available' AND "bookingDate" >= $2`;
-
-  let query;
-  let queryParams;
-
-  if (isUsingToday) {
-    query = `${queryBase} AND ("bookingDate" > $2 OR ("bookingDate" = $2 AND "slotTime" > $3::time)) ORDER BY "bookingDate" ASC, "slotTime" ASC`;
-    queryParams = [doctorId, fromDate, currentTime];
-  } else {
-    query = `${queryBase} ORDER BY "bookingDate" ASC, "slotTime" ASC`;
-    queryParams = [doctorId, fromDate];
-  }
-
-  const { rows: slots } = await pool.query(query, queryParams);
+       WHERE "doctorId" = $1 AND status = 'available'
+         AND "bookingDate" >= GREATEST($2::date, CURRENT_DATE)
+         AND ("bookingDate" > CURRENT_DATE OR ("bookingDate" = CURRENT_DATE AND "slotTime"::time > CURRENT_TIME))
+       ORDER BY "bookingDate" ASC, "slotTime" ASC`,
+      [doctorId, fromDate]
+    );
 
     res.status(200).json({
       success: true,

@@ -41,9 +41,11 @@ export const AppointmentTimeline = ({ appointments }: { appointments: any[] }) =
         ? colors.success
         : status === 'completed'
           ? colors.primary
-          : status === 'cancelled'
-            ? colors.danger
-            : colors.warning;
+          : status === 'missed'
+            ? '#9333EA'
+            : status === 'cancelled'
+              ? colors.danger
+              : colors.warning;
 
       return (
         <View key={appointment.id || appointment._id || index} style={styles.timelineRow}>

@@ -5,17 +5,17 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Feather, FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { colors, radius, shadows, typography } from '../constants/theme';
-import { AppButton, AppChip, EmptyState } from '../components/ui/AppUI';
+import { colors, radius, shadows } from '../constants/theme';
 import { Disease, fetchAllDiseases } from '../services/diseaseService';
 
 export default function DiseaseEncyclopediaScreen() {
@@ -52,14 +52,30 @@ export default function DiseaseEncyclopediaScreen() {
   }, [diseases]);
 
   const filteredDiseases = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+
     return diseases.filter((d) => {
-      const matchesCategory = selectedCategory === 'All' || d.category === selectedCategory;
-      const q = searchQuery.toLowerCase();
-      const matchesSearch =
-        !q ||
-        d.name.toLowerCase().includes(q) ||
-        (d.common_name && d.common_name.toLowerCase().includes(q)) ||
-        (d.symtom && d.symtom.toLowerCase().includes(q));
+      const matchesCategory =
+        selectedCategory === 'All' ||
+        (d.category || '').toLowerCase() === selectedCategory.toLowerCase();
+
+      if (!tokens.length) return matchesCategory;
+
+      const targetText = [
+        d.name,
+        d.common_name,
+        d.symtom,
+        d.solution,
+        d.transmission,
+        d.description,
+        d.category,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      const matchesSearch = tokens.every((token) => targetText.includes(token));
       return matchesCategory && matchesSearch;
     });
   }, [diseases, selectedCategory, searchQuery]);
@@ -77,6 +93,8 @@ export default function DiseaseEncyclopediaScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -94,15 +112,16 @@ export default function DiseaseEncyclopediaScreen() {
           <Feather name="search" size={18} color={colors.textMuted} style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search diseases, conditions or symptoms..."
+            placeholder="Search condition (e.g. Breast cancer, Asthma)..."
             placeholderTextColor={colors.textSoft}
             value={searchQuery}
             onChangeText={setSearchQuery}
             clearButtonMode="while-editing"
+            autoCorrect={false}
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Feather name="x" size={16} color={colors.textMuted} />
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Feather name="x-circle" size={18} color={colors.textMuted} />
             </TouchableOpacity>
           )}
         </View>
@@ -110,7 +129,11 @@ export default function DiseaseEncyclopediaScreen() {
 
       {/* Category Pills */}
       <View style={styles.categoryContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoryList}
+        >
           {categories.map((cat) => (
             <TouchableOpacity
               key={cat}
@@ -119,12 +142,14 @@ export default function DiseaseEncyclopediaScreen() {
                 selectedCategory === cat && styles.categoryChipActive,
               ]}
               onPress={() => setSelectedCategory(cat)}
+              activeOpacity={0.8}
             >
               <Text
                 style={[
                   styles.categoryText,
                   selectedCategory === cat && styles.categoryTextActive,
                 ]}
+                numberOfLines={1}
               >
                 {cat}
               </Text>
@@ -136,20 +161,15 @@ export default function DiseaseEncyclopediaScreen() {
       {/* Disease List */}
       {loading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={colors.primaryMid} />
-          <Text style={styles.loadingText}>Loading disease index...</Text>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading disease encyclopedia...</Text>
         </View>
-      ) : filteredDiseases.length === 0 ? (
-        <EmptyState
-          title="No Conditions Found"
-          description="Try searching for another medical term or change the category filter."
-          icon={<MaterialCommunityIcons name="book-search-outline" size={40} color={colors.textMuted} />}
-        />
       ) : (
         <FlatList
           data={filteredDiseases}
-          keyExtractor={(item) => String(item.id)}
+          keyExtractor={(item) => String(item.id || item.code || item.name)}
           contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -157,50 +177,77 @@ export default function DiseaseEncyclopediaScreen() {
                 setRefreshing(true);
                 loadData();
               }}
-              colors={[colors.primaryMid]}
+              colors={[colors.primary]}
             />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyCard}>
+              <Ionicons name="book-outline" size={44} color={colors.textSoft} />
+              <Text style={styles.emptyTitle}>No Conditions Found</Text>
+              <Text style={styles.emptySub}>
+                {searchQuery
+                  ? `No medical matches found for "${searchQuery}". Try a symptom or broader term.`
+                  : 'No diseases found under the selected category filter.'}
+              </Text>
+              {searchQuery ? (
+                <TouchableOpacity
+                  style={styles.clearSearchBtn}
+                  onPress={() => {
+                    setSearchQuery('');
+                    setSelectedCategory('All');
+                  }}
+                >
+                  <Text style={styles.clearSearchText}>Clear search filters</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           }
           renderItem={({ item }) => {
             const risk = getRiskBadge(item.risk_level);
             return (
               <TouchableOpacity
                 style={styles.card}
-                activeOpacity={0.7}
                 onPress={() => setSelectedDisease(item)}
+                activeOpacity={0.85}
               >
                 <View style={styles.cardHeader}>
                   <View style={styles.cardTitleWrap}>
                     <Text style={styles.cardTitle}>{item.name}</Text>
                     {item.common_name && (
-                      <Text style={styles.cardCommonName}>({item.common_name})</Text>
+                      <Text style={styles.cardCommonName}>Also known as: {item.common_name}</Text>
                     )}
                   </View>
                   <View style={[styles.riskBadge, { backgroundColor: risk.bg }]}>
-                    <Text style={[styles.riskBadgeText, { color: risk.text }]}>{risk.label}</Text>
+                    <Text style={[styles.riskBadgeText, { color: risk.text }]}>
+                      {risk.label}
+                    </Text>
                   </View>
                 </View>
 
-                {item.category && (
-                  <View style={styles.cardMetaRow}>
-                    <View style={styles.categoryBadge}>
-                      <Text style={styles.categoryBadgeText}>{item.category}</Text>
-                    </View>
+                <View style={styles.cardMetaRow}>
+                  <View style={styles.categoryBadge}>
+                    <Text style={styles.categoryBadgeText}>{item.category || 'General'}</Text>
                   </View>
-                )}
+                </View>
 
                 {item.symtom ? (
                   <View style={styles.symptomsPreview}>
-                    <Feather name="activity" size={13} color={colors.primaryMid} style={{ marginRight: 4 }} />
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={15}
+                      color={colors.textMuted}
+                      style={{ marginRight: 6, marginTop: 1 }}
+                    />
                     <Text style={styles.symptomsText} numberOfLines={2}>
-                      <Text style={{ fontWeight: '700', color: colors.text }}>Symptoms: </Text>
+                      <Text style={{ fontWeight: '700' }}>Symptoms: </Text>
                       {item.symtom}
                     </Text>
                   </View>
                 ) : null}
 
                 <View style={styles.cardFooter}>
-                  <Text style={styles.viewGuideText}>View Clinical Guidelines</Text>
-                  <Feather name="chevron-right" size={16} color={colors.primaryMid} />
+                  <Text style={styles.viewGuideText}>View Clinical Guide & Solutions</Text>
+                  <Ionicons name="chevron-forward" size={15} color={colors.primary} />
                 </View>
               </TouchableOpacity>
             );
@@ -208,11 +255,11 @@ export default function DiseaseEncyclopediaScreen() {
         />
       )}
 
-      {/* Disease Detail Modal */}
+      {/* Detail Modal */}
       <Modal
         visible={!!selectedDisease}
         animationType="slide"
-        transparent={true}
+        transparent
         onRequestClose={() => setSelectedDisease(null)}
       >
         <View style={styles.modalOverlay}>
@@ -220,86 +267,86 @@ export default function DiseaseEncyclopediaScreen() {
             {selectedDisease && (
               <>
                 <View style={styles.modalHeader}>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
                     <Text style={styles.modalTitle}>{selectedDisease.name}</Text>
-                    {selectedDisease.common_name && (
-                      <Text style={styles.modalSubtitle}>Also known as: {selectedDisease.common_name}</Text>
-                    )}
+                    {selectedDisease.common_name ? (
+                      <Text style={styles.modalSubtitle}>{selectedDisease.common_name}</Text>
+                    ) : null}
                   </View>
                   <TouchableOpacity
                     style={styles.closeBtn}
                     onPress={() => setSelectedDisease(null)}
                   >
-                    <Feather name="x" size={20} color={colors.text} />
+                    <Ionicons name="close" size={22} color={colors.text} />
                   </TouchableOpacity>
                 </View>
 
                 <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
-                  {/* Category & Risk */}
                   <View style={styles.modalTagsRow}>
-                    <View style={styles.categoryBadge}>
-                      <Text style={styles.categoryBadgeText}>{selectedDisease.category || 'General'}</Text>
+                    <View
+                      style={[
+                        styles.riskBadge,
+                        { backgroundColor: getRiskBadge(selectedDisease.risk_level).bg },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.riskBadgeText,
+                          { color: getRiskBadge(selectedDisease.risk_level).text },
+                        ]}
+                      >
+                        {getRiskBadge(selectedDisease.risk_level).label}
+                      </Text>
                     </View>
-                    {selectedDisease.risk_level && (
-                      <View style={[styles.riskBadge, { backgroundColor: getRiskBadge(selectedDisease.risk_level).bg }]}>
-                        <Text style={[styles.riskBadgeText, { color: getRiskBadge(selectedDisease.risk_level).text }]}>
-                          {getRiskBadge(selectedDisease.risk_level).label}
-                        </Text>
-                      </View>
-                    )}
+                    <View style={styles.categoryBadge}>
+                      <Text style={styles.categoryBadgeText}>{selectedDisease.category}</Text>
+                    </View>
                   </View>
 
-                  {/* Description */}
-                  {selectedDisease.description && (
-                    <View style={styles.detailBlock}>
-                      <Text style={styles.detailLabel}>Overview</Text>
-                      <Text style={styles.detailBody}>{selectedDisease.description}</Text>
-                    </View>
-                  )}
-
-                  {/* Symptoms */}
-                  {selectedDisease.symtom && (
+                  {selectedDisease.description ? (
                     <View style={styles.detailBlock}>
                       <View style={styles.detailLabelRow}>
-                        <Feather name="alert-circle" size={15} color={colors.danger} />
-                        <Text style={[styles.detailLabel, { marginLeft: 6 }]}>Common Symptoms</Text>
+                        <Ionicons name="information-circle-outline" size={17} color={colors.primary} />
+                        <Text style={styles.detailLabel}>Clinical Overview</Text>
+                      </View>
+                      <Text style={styles.detailBody}>{selectedDisease.description}</Text>
+                    </View>
+                  ) : null}
+
+                  {selectedDisease.symtom ? (
+                    <View style={styles.detailBlock}>
+                      <View style={styles.detailLabelRow}>
+                        <Ionicons name="pulse-outline" size={17} color={colors.warning} />
+                        <Text style={styles.detailLabel}>Key Symptoms & Indicators</Text>
                       </View>
                       <Text style={styles.detailBody}>{selectedDisease.symtom}</Text>
                     </View>
-                  )}
+                  ) : null}
 
-                  {/* Transmission */}
-                  {selectedDisease.transmission && (
+                  {selectedDisease.transmission ? (
                     <View style={styles.detailBlock}>
                       <View style={styles.detailLabelRow}>
-                        <Feather name="git-branch" size={15} color={colors.warning} />
-                        <Text style={[styles.detailLabel, { marginLeft: 6 }]}>Transmission / Causes</Text>
+                        <Ionicons name="git-network-outline" size={17} color={colors.textMuted} />
+                        <Text style={styles.detailLabel}>Transmission & Etiology</Text>
                       </View>
                       <Text style={styles.detailBody}>{selectedDisease.transmission}</Text>
                     </View>
-                  )}
+                  ) : null}
 
-                  {/* Solution / Prevention */}
-                  {selectedDisease.solution && (
+                  {selectedDisease.solution ? (
                     <View style={[styles.detailBlock, styles.solutionBlock]}>
                       <View style={styles.detailLabelRow}>
-                        <Feather name="shield" size={15} color={colors.success} />
-                        <Text style={[styles.detailLabel, { color: colors.success, marginLeft: 6 }]}>
-                          Clinical Care & Solutions
+                        <Ionicons name="medkit-outline" size={17} color={colors.success} />
+                        <Text style={[styles.detailLabel, { color: '#065F46' }]}>
+                          Management & Clinical Guidance
                         </Text>
                       </View>
-                      <Text style={styles.detailBody}>{selectedDisease.solution}</Text>
+                      <Text style={[styles.detailBody, { color: '#064E3B' }]}>
+                        {selectedDisease.solution}
+                      </Text>
                     </View>
-                  )}
+                  ) : null}
                 </ScrollView>
-
-                <View style={styles.modalFooter}>
-                  <AppButton
-                    title="Done"
-                    variant="primary"
-                    onPress={() => setSelectedDisease(null)}
-                  />
-                </View>
               </>
             )}
           </View>
@@ -315,39 +362,41 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
-    paddingTop: 54,
-    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 12 : 50,
     paddingBottom: 14,
+    paddingHorizontal: 16,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   backButton: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 12,
     backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
     marginRight: 12,
   },
   headerTitleContainer: {
     flex: 1,
   },
   headerTitle: {
-    ...typography.h3,
+    fontSize: 18,
+    fontWeight: '900',
     color: colors.text,
   },
   headerSubtitle: {
-    ...typography.caption,
+    fontSize: 12,
     color: colors.textMuted,
     marginTop: 2,
   },
   searchSection: {
     paddingHorizontal: 16,
     paddingTop: 12,
+    paddingBottom: 6,
     backgroundColor: colors.surface,
   },
   searchBar: {
@@ -356,36 +405,42 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     borderRadius: radius.md,
     paddingHorizontal: 14,
-    height: 46,
+    height: 48,
     borderWidth: 1,
     borderColor: colors.border,
   },
   searchIcon: {
-    marginRight: 8,
+    marginRight: 10,
   },
   searchInput: {
     flex: 1,
     fontSize: 14,
     color: colors.text,
     fontWeight: '600',
+    height: '100%',
   },
   categoryContainer: {
     backgroundColor: colors.surface,
-    paddingBottom: 12,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   categoryList: {
     paddingHorizontal: 16,
+    alignItems: 'center',
+    flexDirection: 'row',
     gap: 8,
   },
   categoryChip: {
+    height: 36,
     paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: radius.sm,
+    borderRadius: 18,
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
   },
   categoryChipActive: {
     backgroundColor: colors.primary,
@@ -397,7 +452,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   categoryTextActive: {
-    color: colors.textInverse,
+    color: '#fff',
   },
   centerContainer: {
     flex: 1,
@@ -409,7 +464,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: colors.textMuted,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   listContainer: {
     padding: 16,
@@ -418,7 +473,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     padding: 16,
     borderWidth: 1,
     borderColor: colors.border,
@@ -435,14 +490,14 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontWeight: '900',
     color: colors.text,
   },
   cardCommonName: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textMuted,
     fontWeight: '600',
-    marginTop: 1,
+    marginTop: 2,
   },
   riskBadge: {
     paddingHorizontal: 8,
@@ -451,7 +506,7 @@ const styles = StyleSheet.create({
   },
   riskBadgeText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   cardMetaRow: {
     flexDirection: 'row',
@@ -464,9 +519,9 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   categoryBadgeText: {
-    color: colors.primaryMid,
+    color: colors.primary,
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   symptomsPreview: {
     flexDirection: 'row',
@@ -477,9 +532,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   symptomsText: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textMuted,
-    lineHeight: 18,
+    lineHeight: 17,
     flex: 1,
   },
   cardFooter: {
@@ -493,8 +548,44 @@ const styles = StyleSheet.create({
   },
   viewGuideText: {
     fontSize: 13,
-    fontWeight: '700',
-    color: colors.primaryMid,
+    fontWeight: '800',
+    color: colors.primary,
+  },
+  emptyCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: 28,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: colors.text,
+    marginTop: 10,
+  },
+  emptySub: {
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginTop: 4,
+    maxWidth: 280,
+  },
+  clearSearchBtn: {
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.primarySoft,
+  },
+  clearSearchText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,
@@ -535,7 +626,7 @@ const styles = StyleSheet.create({
   },
   modalScroll: {
     paddingVertical: 16,
-    gap: 16,
+    gap: 14,
   },
   modalTagsRow: {
     flexDirection: 'row',
@@ -555,21 +646,18 @@ const styles = StyleSheet.create({
   detailLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
     marginBottom: 6,
   },
   detailLabel: {
-    fontSize: 14,
-    fontWeight: '800',
+    fontSize: 13,
+    fontWeight: '900',
     color: colors.text,
-    marginBottom: 4,
   },
   detailBody: {
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
     color: colors.text,
     fontWeight: '500',
-  },
-  modalFooter: {
-    paddingTop: 10,
   },
 });

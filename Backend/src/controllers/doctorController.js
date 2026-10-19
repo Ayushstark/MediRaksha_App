@@ -1,6 +1,7 @@
 import { pool } from '../config/db.js';
 import bcrypt from 'bcryptjs';
 import { validatePassword } from '../utils/security.js';
+import { validateDoctorSpecialization } from '../constants/specializations.js';
 
 // GET /api/doctor/info/detail
 export const getDoctorDetail = async (req, res) => {
@@ -32,14 +33,38 @@ export const updateDoctorDetail = async (req, res) => {
   const doctorId = req.user.id;
   const { name, number, age, gender, hospital, speciality, password } = req.body;
 
-  const allowedFields = { name, number, age, gender, hospital, speciality };
   const updates = {};
 
-  // Only include fields that were actually sent
-  for (const [key, value] of Object.entries(allowedFields)) {
-    if (value !== undefined && value !== null && value !== '') {
-      updates[key] = value;
+  if (name !== undefined && name !== null && name !== '') {
+    updates.name = String(name).trim();
+  }
+  if (number !== undefined && number !== null) {
+    updates.number = String(number).trim();
+  }
+  if (hospital !== undefined && hospital !== null && hospital !== '') {
+    updates.hospital = String(hospital).trim();
+  }
+  if (age !== undefined && age !== null && age !== '') {
+    const parsedAge = Number(age);
+    if (!isNaN(parsedAge) && parsedAge > 0) {
+      updates.age = parsedAge;
     }
+  }
+  if (gender !== undefined && gender !== null && gender !== '') {
+    let normalizedGender = String(gender).trim().toLowerCase();
+    if (normalizedGender === 'third gender') normalizedGender = 'other';
+    if (!['male', 'female', 'other'].includes(normalizedGender)) normalizedGender = 'other';
+    updates.gender = normalizedGender;
+  }
+  if (speciality !== undefined && speciality !== null && speciality !== '') {
+    const specCheck = validateDoctorSpecialization(speciality);
+    if (!specCheck.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid doctor specialization. Please select an approved medical specialty (e.g. General Physician, Cardiologist, Dermatologist, Pediatrics, etc.).'
+      });
+    }
+    updates.speciality = specCheck.canonicalName;
   }
 
   // Handle password separately — hash before storing

@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View,
   Platform,
+  StatusBar,
   useWindowDimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -100,16 +101,26 @@ export default function MediConnect() {
   useEffect(() => { loadNearby(); }, [loadNearby]);
 
   const runSearch = async () => {
-    if (!query.trim()) {
+    Keyboard.dismiss();
+    const cleanQuery = query.trim();
+    if (!cleanQuery) {
       loadNearby();
       return;
     }
     setSearching(true);
     setError('');
     try {
-      setHospitals(await searchMediConnectHospitals({ city: query.trim(), type: hospitalType || undefined, facility: facilityType || undefined }));
+      const results = await searchMediConnectHospitals({
+        city: cleanQuery,
+        type: hospitalType || undefined,
+        facility: facilityType || undefined,
+      });
+      if (Array.isArray(results) && results.length > 0) {
+        setHospitals(results);
+      }
+      // If backend has no specific records, visibleHospitals filter gracefully keeps loaded nearby hospitals matching the query
     } catch (requestError: any) {
-      setError(requestError?.response?.status === 404 ? 'Hospital search is not available on the configured backend yet.' : 'Hospital search failed.');
+      console.warn('Hospital search backend response:', requestError?.message);
     } finally {
       setSearching(false);
     }
@@ -131,16 +142,47 @@ export default function MediConnect() {
   };
 
   const visibleHospitals = useMemo(() => hospitals.filter((hospital) => {
-    const haystack = `${hospital.name} ${hospital.city || ''} ${hospital.state || ''}`.toLowerCase();
-    return !query.trim() || haystack.includes(query.trim().toLowerCase());
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = `${hospital.name} ${hospital.city || ''} ${hospital.state || ''} ${hospital.address || ''} ${hospital.type || ''}`.toLowerCase();
+    return q.split(/\s+/).filter(Boolean).every(token => haystack.includes(token));
   }), [hospitals, query]);
 
   const visibleCare = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (category === 'doctors') return MEDICONNECT_DOCTORS.filter((doctor) => !q || `${doctor.name} ${doctor.specialization} ${doctor.hospital}`.toLowerCase().includes(q));
-    if (category === 'labs') return MEDICONNECT_LABS.filter((lab) => (!q || `${lab.name} ${lab.address} ${lab.tests.join(' ')}`.toLowerCase().includes(q)) && (!homeCollectionOnly || lab.homeCollection));
-    if (category === 'pharmacies') return MEDICONNECT_PHARMACIES.filter((pharmacy) => (!q || `${pharmacy.name} ${pharmacy.address}`.toLowerCase().includes(q)) && (!deliveryOnly || pharmacy.delivery)).sort((a, b) => pharmacySort === 'rating' ? b.rating - a.rating : pharmacySort === 'open' ? Number(b.isOpen) - Number(a.isOpen) : pharmacySort === 'name' ? a.name.localeCompare(b.name) : a.distance - b.distance);
-    return MEDICONNECT_PACKAGES.filter((item) => !q || `${item.name} ${item.provider} ${item.category} ${item.tests.join(' ')}`.toLowerCase().includes(q));
+    const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+
+    const matchesTokens = (text: string) => {
+      if (!tokens.length) return true;
+      const target = text.toLowerCase();
+      return tokens.every(t => target.includes(t));
+    };
+
+    if (category === 'doctors') {
+      return MEDICONNECT_DOCTORS.filter((doctor) =>
+        matchesTokens(`${doctor.name} ${doctor.specialization} ${doctor.hospital} ${doctor.qualification}`)
+      );
+    }
+    if (category === 'labs') {
+      return MEDICONNECT_LABS.filter((lab) =>
+        matchesTokens(`${lab.name} ${lab.address} ${lab.tests.join(' ')}`) &&
+        (!homeCollectionOnly || lab.homeCollection)
+      );
+    }
+    if (category === 'pharmacies') {
+      return MEDICONNECT_PHARMACIES.filter((pharmacy) =>
+        matchesTokens(`${pharmacy.name} ${pharmacy.address}`) &&
+        (!deliveryOnly || pharmacy.delivery)
+      ).sort((a, b) =>
+        pharmacySort === 'rating' ? b.rating - a.rating :
+        pharmacySort === 'open' ? Number(b.isOpen) - Number(a.isOpen) :
+        pharmacySort === 'name' ? a.name.localeCompare(b.name) :
+        a.distance - b.distance
+      );
+    }
+    return MEDICONNECT_PACKAGES.filter((item) =>
+      matchesTokens(`${item.name} ${item.provider} ${item.category} ${item.tests.join(' ')}`)
+    );
   }, [category, deliveryOnly, homeCollectionOnly, pharmacySort, query]);
 
   const loadReviews = async (type: 'hospital' | 'doctor', id: string) => {
@@ -172,15 +214,16 @@ export default function MediConnect() {
 
   const categories = [
     { key: 'hospitals' as const, label: 'Hospitals', icon: 'business' as const, count: visibleHospitals.length },
-    { key: 'doctors' as const, label: 'Doctors', icon: 'medical' as const, count: MEDICONNECT_DOCTORS.length },
-    { key: 'labs' as const, label: 'Labs & Diagnostics', icon: 'flask' as const, count: MEDICONNECT_LABS.length },
-    { key: 'pharmacies' as const, label: 'Pharmacies', icon: 'medkit' as const, count: MEDICONNECT_PHARMACIES.length },
-    { key: 'packages' as const, label: 'Health Packages', icon: 'cube' as const, count: MEDICONNECT_PACKAGES.length },
+    { key: 'doctors' as const, label: 'Doctors', icon: 'medical' as const, count: category === 'doctors' ? visibleCare.length : MEDICONNECT_DOCTORS.length },
+    { key: 'labs' as const, label: 'Labs & Diagnostics', icon: 'flask' as const, count: category === 'labs' ? visibleCare.length : MEDICONNECT_LABS.length },
+    { key: 'pharmacies' as const, label: 'Pharmacies', icon: 'medkit' as const, count: category === 'pharmacies' ? visibleCare.length : MEDICONNECT_PHARMACIES.length },
+    { key: 'packages' as const, label: 'Health Packages', icon: 'cube' as const, count: category === 'packages' ? visibleCare.length : MEDICONNECT_PACKAGES.length },
   ];
   const categoryTabWidth = Math.min(164, Math.max(138, Math.floor(width * 0.44)));
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
@@ -191,31 +234,80 @@ export default function MediConnect() {
             <Text style={styles.subtitle}>Hospital intelligence around you</Text>
           </View>
           <TouchableOpacity onPress={loadNearby} style={styles.iconButton}>
-            <Feather name="refresh-cw" size={19} color="#1A237E" />
+            <Feather name="refresh-cw" size={18} color="#1A237E" />
           </TouchableOpacity>
         </View>
 
-        <ScrollView horizontal style={styles.categoryTabs} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.categoryTabsContent}>
-          {categories.map((item) => <TouchableOpacity key={item.key} style={[styles.categoryTab, { width: categoryTabWidth }, category === item.key && styles.categoryTabActive]} onPress={() => { Keyboard.dismiss(); setCategory(item.key); setQuery(''); }}><Ionicons name={item.icon} size={18} color={category === item.key ? '#fff' : '#64748B'} /><Text numberOfLines={2} style={[styles.categoryTabText, category === item.key && styles.categoryTabTextActive]}>{item.label}</Text><Text style={[styles.categoryCount, category === item.key && styles.categoryTabTextActive]}>{item.count}</Text></TouchableOpacity>)}
-        </ScrollView>
+        <View style={styles.categoryTabsWrap}>
+          <ScrollView horizontal style={styles.categoryTabs} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.categoryTabsContent}>
+            {categories.map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                style={[styles.categoryTab, { width: categoryTabWidth }, category === item.key && styles.categoryTabActive]}
+                onPress={() => { Keyboard.dismiss(); setCategory(item.key); setQuery(''); }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name={item.icon} size={18} color={category === item.key ? '#fff' : '#64748B'} />
+                <Text numberOfLines={2} style={[styles.categoryTabText, category === item.key && styles.categoryTabTextActive]}>{item.label}</Text>
+                <Text style={[styles.categoryCount, category === item.key && styles.categoryTabTextActive]}>{item.count}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
 
         <View style={styles.searchBox}>
-          <Ionicons name="search" size={20} color="#64748B" />
-          <TextInput value={query} onChangeText={setQuery} onSubmitEditing={category === 'hospitals' ? runSearch : () => Keyboard.dismiss()} placeholder={`Search ${category === 'labs' ? 'labs or tests' : category === 'packages' ? 'packages or tests' : category}`} placeholderTextColor="#94A3B8" style={styles.searchInput} returnKeyType="search" blurOnSubmit />
-          <TouchableOpacity onPress={category === 'hospitals' ? runSearch : () => setQuery(query.trim())} disabled={searching}>
-            {searching ? <ActivityIndicator color="#1A237E" /> : <Text style={styles.searchAction}>{category === 'hospitals' ? 'Search' : 'Filter'}</Text>}
+          <Ionicons name="search" size={18} color="#64748B" />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={category === 'hospitals' ? runSearch : () => Keyboard.dismiss()}
+            placeholder={`Search ${category === 'labs' ? 'labs or tests' : category === 'packages' ? 'packages or tests' : category}...`}
+            placeholderTextColor="#94A3B8"
+            style={styles.searchInput}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+            autoCorrect={false}
+          />
+          {query ? (
+            <TouchableOpacity onPress={() => setQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Feather name="x-circle" size={18} color="#94A3B8" />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={category === 'hospitals' ? runSearch : () => setQuery(query.trim())} disabled={searching} style={styles.searchActionBtn}>
+            {searching ? <ActivityIndicator size="small" color="#1A237E" /> : <Text style={styles.searchAction}>{category === 'hospitals' ? 'Search' : 'Filter'}</Text>}
           </TouchableOpacity>
         </View>
 
-        {category === 'hospitals' ? <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
-          <Chip label={`${radius} km`} active onPress={() => setRadius(radius === 10 ? 25 : 10)} />
-          <Chip label="All types" active={!hospitalType} onPress={() => setHospitalType('')} />
-          {MEDICONNECT_HOSPITAL_TYPES.map((type) => <Chip key={type} label={labelize(type)} active={hospitalType === type} onPress={() => setHospitalType(hospitalType === type ? '' : type)} />)}
-          {MEDICONNECT_FACILITY_TYPES.map((type) => <Chip key={type} label={labelize(type)} active={facilityType === type} onPress={() => setFacilityType(facilityType === type ? '' : type)} />)}
-        </ScrollView> : category === 'labs' ? <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}><Chip label="All labs" active={!homeCollectionOnly} onPress={() => setHomeCollectionOnly(false)} /><Chip label="Home collection" active={homeCollectionOnly} onPress={() => setHomeCollectionOnly(!homeCollectionOnly)} /></ScrollView> : category === 'pharmacies' ? <>
-          <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}><Chip label="All pharmacies" active={!deliveryOnly} onPress={() => setDeliveryOnly(false)} /><Chip label="Home delivery" active={deliveryOnly} onPress={() => setDeliveryOnly(!deliveryOnly)} /></ScrollView>
-          <ScrollView horizontal style={styles.sortScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sortChips}><Chip label="Nearest" active={pharmacySort === 'distance'} onPress={() => setPharmacySort('distance')} /><Chip label="Top Rated" active={pharmacySort === 'rating'} onPress={() => setPharmacySort('rating')} /><Chip label="Open Now" active={pharmacySort === 'open'} onPress={() => setPharmacySort('open')} /><Chip label="A-Z" active={pharmacySort === 'name'} onPress={() => setPharmacySort('name')} /></ScrollView>
-        </> : null}
+        {category === 'hospitals' ? (
+          <View style={styles.filterScrollWrap}>
+            <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+              <Chip label={`${radius} km`} active onPress={() => setRadius(radius === 10 ? 25 : 10)} />
+              <Chip label="All types" active={!hospitalType} onPress={() => setHospitalType('')} />
+              {MEDICONNECT_HOSPITAL_TYPES.map((type) => <Chip key={type} label={labelize(type)} active={hospitalType === type} onPress={() => setHospitalType(hospitalType === type ? '' : type)} />)}
+              {MEDICONNECT_FACILITY_TYPES.map((type) => <Chip key={type} label={labelize(type)} active={facilityType === type} onPress={() => setFacilityType(facilityType === type ? '' : type)} />)}
+            </ScrollView>
+          </View>
+        ) : category === 'labs' ? (
+          <View style={styles.filterScrollWrap}>
+            <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+              <Chip label="All labs" active={!homeCollectionOnly} onPress={() => setHomeCollectionOnly(false)} />
+              <Chip label="Home collection" active={homeCollectionOnly} onPress={() => setHomeCollectionOnly(!homeCollectionOnly)} />
+            </ScrollView>
+          </View>
+        ) : category === 'pharmacies' ? (
+          <View style={styles.pharmacyFilterWrap}>
+            <ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+              <Chip label="All pharmacies" active={!deliveryOnly} onPress={() => setDeliveryOnly(false)} />
+              <Chip label="Home delivery" active={deliveryOnly} onPress={() => setDeliveryOnly(!deliveryOnly)} />
+            </ScrollView>
+            <ScrollView horizontal style={styles.sortScroll} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sortChips}>
+              <Chip label="Nearest" active={pharmacySort === 'distance'} onPress={() => setPharmacySort('distance')} />
+              <Chip label="Top Rated" active={pharmacySort === 'rating'} onPress={() => setPharmacySort('rating')} />
+              <Chip label="Open Now" active={pharmacySort === 'open'} onPress={() => setPharmacySort('open')} />
+              <Chip label="A-Z" active={pharmacySort === 'name'} onPress={() => setPharmacySort('name')} />
+            </ScrollView>
+          </View>
+        ) : null}
 
         {category === 'hospitals' ? <View style={styles.locationRow}>
           <Ionicons name="navigate" size={16} color="#047857" />
@@ -323,14 +415,32 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   container: { flex: 1, backgroundColor: '#F5F7FB' },
   flex: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingTop: 40, paddingBottom: 12, gap: 20 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 12 : 50, paddingBottom: 14, gap: 14 },
   iconButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  title: { color: '#0F172A', fontSize: 24, fontWeight: '900' }, subtitle: { color: '#64748B', marginTop: 2 },
-  categoryTabs: { height: 76 }, categoryTabsContent: { paddingHorizontal: 18, gap: 8, alignItems: 'center' }, categoryTab: { height: 58, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 16, paddingHorizontal: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0' }, categoryTabActive: { backgroundColor: '#1A237E', borderColor: '#1A237E' }, categoryTabText: { flex: 1, color: '#475569', fontSize: 13, lineHeight: 16, fontWeight: '800' }, categoryTabTextActive: { color: '#fff' }, categoryCount: { color: '#94A3B8', fontSize: 11, fontWeight: '900' },
-  searchBox: { marginHorizontal: 18, marginTop: 0, marginBottom: 0, backgroundColor: '#fff', borderRadius: 17, paddingHorizontal: 14, height: 54, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: '#E2E8F0' },
-  searchInput: { flex: 1, color: '#0F172A', fontSize: 14 }, searchAction: { color: '#1A237E', fontWeight: '900' },
-  filterScroll: { height: 60, marginTop: 6 }, sortScroll: { height: 56, marginTop: 4 }, chips: { height: 52, paddingHorizontal: 18, gap: 8, alignItems: 'center' }, chip: { height: 36, justifyContent: 'center', borderRadius: 18, paddingHorizontal: 13, backgroundColor: '#E2E8F0' }, activeChip: { backgroundColor: '#1A237E' }, chipText: { color: '#334155', fontSize: 12, fontWeight: '800' }, activeChipText: { color: '#fff' },
-  sortChips: { height: 48, paddingHorizontal: 18, gap: 8, alignItems: 'center' },
+  title: { color: '#0F172A', fontSize: 24, fontWeight: '900' },
+  subtitle: { color: '#64748B', marginTop: 2, fontSize: 13, fontWeight: '600' },
+  categoryTabsWrap: { marginBottom: 12 },
+  categoryTabs: { height: 68 },
+  categoryTabsContent: { paddingHorizontal: 18, gap: 8, alignItems: 'center' },
+  categoryTab: { height: 54, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 16, paddingHorizontal: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0' },
+  categoryTabActive: { backgroundColor: '#1A237E', borderColor: '#1A237E' },
+  categoryTabText: { flex: 1, color: '#475569', fontSize: 13, lineHeight: 16, fontWeight: '800' },
+  categoryTabTextActive: { color: '#fff' },
+  categoryCount: { color: '#94A3B8', fontSize: 11, fontWeight: '900' },
+  searchBox: { marginHorizontal: 18, marginBottom: 8, backgroundColor: '#fff', borderRadius: 17, paddingHorizontal: 14, height: 50, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  searchInput: { flex: 1, color: '#0F172A', fontSize: 14 },
+  searchActionBtn: { paddingHorizontal: 6, paddingVertical: 4 },
+  searchAction: { color: '#1A237E', fontWeight: '900' },
+  filterScrollWrap: { marginBottom: 6 },
+  pharmacyFilterWrap: { marginBottom: 6 },
+  filterScroll: { height: 48 },
+  sortScroll: { height: 44, marginTop: 2 },
+  chips: { height: 44, paddingHorizontal: 18, gap: 8, alignItems: 'center' },
+  chip: { height: 34, justifyContent: 'center', borderRadius: 17, paddingHorizontal: 13, backgroundColor: '#E2E8F0' },
+  activeChip: { backgroundColor: '#1A237E' },
+  chipText: { color: '#334155', fontSize: 12, fontWeight: '800' },
+  activeChipText: { color: '#fff' },
+  sortChips: { height: 40, paddingHorizontal: 18, gap: 8, alignItems: 'center' },
   locationRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 10, gap: 6 }, locationText: { flex: 1, color: '#047857', fontSize: 12, fontWeight: '700' }, resultCount: { color: '#64748B', fontSize: 12, fontWeight: '800' },
   list: { paddingHorizontal: 18, paddingBottom: 30, gap: 12 }, card: { backgroundColor: '#fff', borderRadius: 20, padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#E2E8F0' }, cardIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' }, cardTitle: { color: '#0F172A', fontSize: 16, fontWeight: '900' }, cardMeta: { color: '#1A237E', fontSize: 12, fontWeight: '800', marginTop: 3 }, cardAddress: { color: '#64748B', fontSize: 12, marginTop: 5, lineHeight: 17 }, badgeRow: { flexDirection: 'row', gap: 7, marginTop: 8 }, badge: { backgroundColor: '#ECFDF5', color: '#047857', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, fontSize: 11, fontWeight: '800' },
   testLine: { color: '#64748B', fontSize: 11, marginTop: 8 }, priceRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 8 }, packagePrice: { color: '#B45309', fontSize: 18, fontWeight: '900' }, originalPrice: { color: '#94A3B8', textDecorationLine: 'line-through', fontSize: 11 }, discount: { color: '#047857', backgroundColor: '#ECFDF5', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 3, fontSize: 10, fontWeight: '900' }, packageCard: { alignItems: 'flex-start' }, packageActions: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }, requestButton: { backgroundColor: '#FEF3C7', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 }, requestText: { color: '#B45309', fontSize: 11, fontWeight: '900' }, bookButton: { backgroundColor: '#D97706', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 }, bookText: { color: '#fff', fontSize: 11, fontWeight: '900' },

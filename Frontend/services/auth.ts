@@ -11,6 +11,17 @@ const saveSession = async (token: string | undefined, role: string, user: any) =
   }
 };
 
+export const updateStoredProfile = async (updatedData: any) => {
+  try {
+    const raw = await SecureStore.getItemAsync('userProfile');
+    const existing = raw ? JSON.parse(raw) : {};
+    const merged = { ...existing, ...updatedData };
+    await SecureStore.setItemAsync('userProfile', JSON.stringify(merged));
+  } catch (err) {
+    console.warn('Failed to update stored profile in SecureStore:', err);
+  }
+};
+
 export const signup = async (
   email: string,
   password: string,
@@ -18,12 +29,15 @@ export const signup = async (
   role: string = 'Patient',
   age?: number,
   gender?: string,
-  phone?: string
+  phone?: string,
+  speciality?: string,
+  hospital?: string
 ) => {
   const normalizedEmailOrId = email.trim();
   const isDoctor = role === 'Doctor';
   const endpoint = isDoctor ? '/auth/doctor/signup' : '/auth/signup';
-  const normalizedGender = gender?.trim().toLowerCase();
+  const cleanGender = gender?.trim().toLowerCase();
+  const normalizedGender = cleanGender === 'third gender' ? 'other' : cleanGender;
   const requestData = role === 'Doctor'
     ? {
       name: fullname,
@@ -31,8 +45,8 @@ export const signup = async (
       number: phone,
       age,
       gender: normalizedGender,
-      hospital: '',
-      speciality: 'General',
+      hospital: hospital?.trim() || 'General Hospital',
+      speciality: speciality?.trim() || 'General Physician',
       password
     }
     : {

@@ -5,6 +5,7 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -29,6 +30,7 @@ export default function DoctorReports() {
     const [reports, setReports] = useState<MedicalReport[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
     const [selectedReport, setSelectedReport] = useState<MedicalReport | null>(null);
     const [previewUri, setPreviewUri] = useState('');
     const [previewType, setPreviewType] = useState<PreviewType>('other');
@@ -68,6 +70,17 @@ export default function DoctorReports() {
         }
     };
 
+    const filteredReports = reports.filter((r) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase().trim();
+        return (
+            (r.title && r.title.toLowerCase().includes(q)) ||
+            (r.originalFileName && r.originalFileName.toLowerCase().includes(q)) ||
+            (r.category && r.category.toLowerCase().includes(q)) ||
+            ((r as any).patientName && (r as any).patientName.toLowerCase().includes(q))
+        );
+    });
+
     if (loading) return <LoadingState label="Loading shared patient reports..." />;
 
     return (
@@ -85,18 +98,37 @@ export default function DoctorReports() {
                 </TouchableOpacity>
             </View>
 
+            {/* Search Bar */}
+            <View style={styles.searchBar}>
+                <Ionicons name="search" size={18} color="#64748B" style={styles.searchIcon} />
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search reports by title, category, file..."
+                    placeholderTextColor="#94A3B8"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    clearButtonMode="while-editing"
+                    autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                    </TouchableOpacity>
+                )}
+            </View>
+
             {error ? (
                 <ErrorState title="Unable to load shared reports" subtitle={error} onRetry={fetchReports} />
             ) : (
                 <ScrollView contentContainerStyle={styles.scroll}>
-                    {reports.length === 0 ? (
+                    {filteredReports.length === 0 ? (
                         <EmptyState
                             icon="documents-outline"
-                            title="No shared records found"
-                            subtitle="Patients must upload reports with doctor visibility before they appear here."
+                            title={searchQuery ? 'No matching reports' : 'No shared records found'}
+                            subtitle={searchQuery ? `No reports matched "${searchQuery}"` : 'Patients must upload reports with doctor visibility before they appear here.'}
                         />
                     ) : (
-                        reports.map((report) => (
+                        filteredReports.map((report) => (
                             <TouchableOpacity key={report.id} style={styles.reportCard} onPress={() => openReport(report)}>
                                 <View style={styles.reportInfo}>
                                     <Ionicons name="document-text" size={30} color="#1A237E" />
@@ -153,6 +185,21 @@ const styles = StyleSheet.create({
     headerTitleContainer: { flex: 1, alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1A237E' },
     headerSub: { fontSize: 11, color: '#64748B', marginTop: 2 },
+    searchBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        marginHorizontal: 20,
+        marginTop: 14,
+        marginBottom: 2,
+        paddingHorizontal: 12,
+        paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    },
+    searchIcon: { marginRight: 8 },
+    searchInput: { flex: 1, fontSize: 14, color: '#0F172A' },
     scroll: { padding: 20 },
     reportCard: { backgroundColor: '#fff', borderRadius: 15, padding: 16, marginBottom: 15, elevation: 3, borderLeftWidth: 4, borderLeftColor: '#1A237E' },
     reportInfo: { flexDirection: 'row', alignItems: 'center' },

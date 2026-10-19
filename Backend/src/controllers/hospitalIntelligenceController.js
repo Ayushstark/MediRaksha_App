@@ -173,7 +173,7 @@ export const getNearbyHospitalsHandler = async (req, res) => {
 
 export const searchHospitalsHandler = async (req, res) => {
   try {
-    const { city, facility, department, type, page = '1', limit = '20' } = req.query;
+    const { q, query: term, name, city, facility, department, type, page = '1', limit = '20' } = req.query;
 
     if (type && !VALID_HOSPITAL_TYPES.has(type)) {
       return res.status(400).json({
@@ -190,6 +190,7 @@ export const searchHospitalsHandler = async (req, res) => {
     }
 
     const hospitals = await searchHospitals({
+      q:             (q || term || name || '')?.trim() || null,
       city:          city?.trim()       ?? null,
       facilityType:  facility           ?? null,
       departmentName: department?.trim() ?? null,

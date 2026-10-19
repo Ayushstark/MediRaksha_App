@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { AppButton, AppChip, AppHeader, EmptyState } from '../components/ui/AppUI';
 import { colors, radius, shadows, spacing } from '../constants/theme';
-import { getDoctors } from '../services/medirakshaApi';
+import { getDoctors, formatSlotDateBadge, formatTime12Hour } from '../services/medirakshaApi';
 import { fetchReviews, submitReview, Review } from '../services/reviewService';
 
 export default function DoctorDetails() {
@@ -102,7 +102,7 @@ export default function DoctorDetails() {
     [doctor]
   );
 
-  const bookDoctor = () => {
+  const bookDoctor = (selectedSlot?: any) => {
     router.push({
       pathname: '/BookAppointment',
       params: {
@@ -110,6 +110,9 @@ export default function DoctorDetails() {
         doctorName: doctor?.name || params.doctorName,
         availability: JSON.stringify(doctor?.availableSlots || []),
         directSlot: 'true',
+        initialDate: selectedSlot ? (selectedSlot.bookingDate || selectedSlot.date) : (params.initialDate as string | undefined),
+        initialSlotId: selectedSlot ? (selectedSlot.id || selectedSlot._id) : (params.initialSlotId as string | undefined),
+        initialSlotTime: selectedSlot ? (selectedSlot.slotTime || selectedSlot.time) : (params.initialSlotTime as string | undefined),
       },
     });
   };
@@ -153,12 +156,17 @@ export default function DoctorDetails() {
           <Text style={styles.sectionTitle}>Published Slots</Text>
           {availableSlots.length ? (
             <View style={styles.slotWrap}>
-              {availableSlots.slice(0, 12).map((slot: any) => (
-                <AppChip
-                  key={slot.id || slot._id || `${slot.bookingDate}-${slot.slotTime}`}
-                  label={`${String(slot.bookingDate || slot.date || '').slice(5)} ${slot.slotTime || slot.time}`}
-                />
-              ))}
+              {availableSlots.slice(0, 16).map((slot: any) => {
+                const badge = formatSlotDateBadge(slot.bookingDate || slot.date);
+                const timeText = formatTime12Hour(slot.slotTime || slot.time);
+                return (
+                  <AppChip
+                    key={slot.id || slot._id || `${slot.bookingDate}-${slot.slotTime}`}
+                    label={`${badge ? `${badge} • ` : ''}${timeText}`}
+                    onPress={() => bookDoctor(slot)}
+                  />
+                );
+              })}
             </View>
           ) : (
             <EmptyState

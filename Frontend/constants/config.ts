@@ -7,10 +7,6 @@ const getBackendUrls = () => {
         ? `${rawConfiguredUrl.replace(/\/+$/, '')}${/\/api$/i.test(rawConfiguredUrl) ? '' : '/api'}`
         : undefined;
 
-    if (configuredUrl && !/localhost|127\.0\.0\.1|10\.0\.2\.2/i.test(configuredUrl)) {
-        return [configuredUrl];
-    }
-
     const expoConstants = Constants as any;
     const hostUri =
         Constants.expoConfig?.hostUri ||
@@ -20,9 +16,14 @@ const getBackendUrls = () => {
     const urls = [
         configuredUrl,
         host ? `http://${host}:3000/api` : undefined,
+        host ? `http://${host}:8000/api` : undefined,
         Platform.OS === 'android' ? 'http://10.0.2.2:3000/api' : undefined,
+        Platform.OS === 'android' ? 'http://10.0.2.2:8000/api' : undefined,
         'http://127.0.0.1:3000/api',
         'http://localhost:3000/api',
+        'http://127.0.0.1:8000/api',
+        'http://localhost:8000/api',
+        'https://mediraksha-app-latest.onrender.com/api',
     ].filter(Boolean) as string[];
 
     return [...new Set(urls)];

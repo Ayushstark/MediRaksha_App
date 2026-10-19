@@ -26,6 +26,11 @@ import {
     getPatientAppointments,
     normalizeSpeciality,
     toDateString,
+    isSlotPassed,
+    filterUpcomingSlots,
+    formatTime12Hour,
+    formatSlotDateBadge,
+    formatSlotDateFull,
 } from '../services/medirakshaApi';
 import { scheduleAppointmentReminder } from '../services/appointmentReminders';
 import { colors } from '../constants/theme';
@@ -71,8 +76,15 @@ export default function BookAppointment() {
     // --- FORM DATA ---
     const [selectedSpecialty, setSelectedSpecialty] = useState(params.specialty || '');
     const [selectedDoctor, setSelectedDoctor] = useState<any>(null);
+    const [doctorSearchQuery, setDoctorSearchQuery] = useState('');
     const [consultType, setConsultType] = useState('In-Person');
-    const [selectedDate, setSelectedDate] = useState(new Date());
+    const [selectedDate, setSelectedDate] = useState(() => {
+        if (params.initialDate) {
+            const initD = new Date(`${params.initialDate}T00:00:00`);
+            if (!isNaN(initD.getTime())) return initD;
+        }
+        return new Date();
+    });
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [selectedTimeSlot, setSelectedTimeSlot] = useState<any>(null);
     const [reason, setReason] = useState('');
@@ -98,9 +110,12 @@ export default function BookAppointment() {
                         name: doc.name,
                         specialty: normalizeSpeciality(doc.speciality ?? doc.specialization ?? doc.specialty),
                         hospitalName: doc.hospital || "MediRaksha Clinic",
+                        address: doc.address || '',
+                        distance: doc.distance,
                         rating: doc.rating || (4.5 + (Math.random() * 0.5)),
-                        exp: doc.experience || '10+ yrs',
-                        fee: doc.fee || '500'
+                        exp: doc.experience ? `${doc.experience} yrs` : '10+ yrs',
+                        fee: doc.fee || '500',
+                        availableSlots: Array.isArray(doc.availableSlots) ? doc.availableSlots : [],
                     };
                 });
                 setRawDoctorMap(rawMap);
@@ -128,15 +143,39 @@ export default function BookAppointment() {
         }
     }, [selectedSpecialty, allDoctors]);
 
-    // 3. Handle External Param (from DoctorDetails)
+    const filteredDoctorList = useMemo(() => {
+        let list = doctorList;
+        if (doctorSearchQuery.trim()) {
+            const q = doctorSearchQuery.trim().toLowerCase();
+            const tokens = q.split(/\s+/).filter(Boolean);
+            list = list.filter((doc) => {
+                const haystack = `${doc.name} ${doc.specialty} ${doc.hospitalName || ''} ${doc.address || ''}`.toLowerCase();
+                return tokens.every((token) => haystack.includes(token));
+            });
+        }
+        return list;
+    }, [doctorList, doctorSearchQuery]);
+
+    // 3. Handle External Param (from DoctorDetails or DoctorList)
     useEffect(() => {
+        if (params.initialDate) {
+            try {
+                const initD = new Date(`${params.initialDate}T00:00:00`);
+                if (!isNaN(initD.getTime())) {
+                    setSelectedDate(initD);
+                }
+            } catch {}
+        }
         if (doctorId || doctorName) {
             const found = allDoctors.find(d =>
                 (doctorId && String(d.id) === String(doctorId)) ||
                 (doctorName && String(d.name).toLowerCase() === String(doctorName).toLowerCase())
             );
             if (found) {
-                setSelectedDoctor(found);
+                setSelectedDoctor({
+                    ...found,
+                    availableSlots: found.availableSlots?.length ? found.availableSlots : passedAvailability,
+                });
                 setSelectedSpecialty(found.specialty);
             } else if (doctorId || doctorName) {
                 setSelectedDoctor({
@@ -144,21 +183,65 @@ export default function BookAppointment() {
                     name: String(doctorName || 'Selected Doctor'),
                     specialty: '',
                     hospitalName: 'MediRaksha Clinic',
+                    availableSlots: passedAvailability,
                 });
                 if (passedAvailability.length) {
                     setSlots(passedAvailability);
                 }
             }
         }
-    }, [doctorId, doctorName, allDoctors, passedAvailability]);
+    }, [doctorId, doctorName, allDoctors, passedAvailability, params.initialDate]);
 
-    // 4. Load Slots when Doctor/Date changes
+    // Extract unique available dates from published slots
+    const doctorAvailableDates = useMemo(() => {
+        const slotsToScan = (selectedDoctor?.availableSlots?.length ? selectedDoctor.availableSlots : passedAvailability) || [];
+        const dateSet = new Set<string>();
+        const todayStr = toDateString(new Date());
+
+        slotsToScan.forEach((slot: any) => {
+            const d = slot.bookingDate || slot.date;
+            if (d && d >= todayStr && slot.status !== 'booked') {
+                if (!isSlotPassed(d, slot.slotTime || slot.time)) {
+                    dateSet.add(d);
+                }
+            }
+        });
+
+        return Array.from(dateSet).sort();
+    }, [selectedDoctor, passedAvailability]);
+
+    // Auto-advance date to first date with available slots if today has none
+    useEffect(() => {
+        if (doctorAvailableDates.length > 0 && !params.initialDate) {
+            const todayStr = toDateString(new Date());
+            const hasSlotsToday = doctorAvailableDates.includes(todayStr);
+            if (!hasSlotsToday) {
+                setSelectedDate(new Date(`${doctorAvailableDates[0]}T00:00:00`));
+            }
+        }
+    }, [doctorAvailableDates, params.initialDate]);
+
+    // 4. Load Slots when Doctor or Date changes in step 2
     useEffect(() => {
         if (selectedDoctor && selectedDate && step === 2) {
-            setSlots([]); // Clear slots on date change
-            setSelectedTimeSlot(null);
+            loadSlots();
         }
-    }, [selectedDoctor, selectedDate, step]);
+    }, [selectedDoctor?.id, toDateString(selectedDate), step]);
+
+    // Auto-select initial slot when slots become available
+    useEffect(() => {
+        if (slots.length > 0 && !selectedTimeSlot) {
+            const targetId = params.initialSlotId as string | undefined;
+            const targetTime = params.initialSlotTime as string | undefined;
+            if (targetId) {
+                const match = slots.find((s: any) => String(s.id || s._id) === String(targetId));
+                if (match) setSelectedTimeSlot(match);
+            } else if (targetTime) {
+                const match = slots.find((s: any) => (s.slotTime || s.time) === targetTime);
+                if (match) setSelectedTimeSlot(match);
+            }
+        }
+    }, [slots, params.initialSlotId, params.initialSlotTime, selectedTimeSlot]);
 
     const loadSlots = async () => {
         if (!selectedDoctor) return;
@@ -311,6 +394,17 @@ export default function BookAppointment() {
         }
 
         const dateStr = selectedTimeSlot.bookingDate || selectedTimeSlot.date || toDateString(selectedDate);
+        const slotTime = selectedTimeSlot.slotTime || selectedTimeSlot.time;
+
+        if (isSlotPassed(dateStr, slotTime)) {
+            setSlots(prev => prev.filter((s: any) => (s.id || s._id) !== (selectedTimeSlot.id || selectedTimeSlot._id)));
+            setSelectedTimeSlot(null);
+            Alert.alert(
+                'Time Slot Passed',
+                'This time slot has already passed and can no longer be booked. Please select an upcoming time slot.'
+            );
+            return;
+        }
 
         setLoading(true);
         try {
@@ -487,27 +581,61 @@ export default function BookAppointment() {
                 ))}
             </View>
 
-            <TouchableOpacity
-                style={styles.nearMeBtn}
-                onPress={() => router.push({ pathname: '/NearbyHospitals', params: { automated: 'true' } })}
-            >
-                <Ionicons name="location" size={18} color="#1A237E" />
-                <Text style={styles.nearMeText}>Find Hospitals Around Me</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>
+                <TouchableOpacity
+                    style={[styles.nearMeBtn, { flex: 1, marginTop: 0 }]}
+                    onPress={() => router.push({ pathname: '/NearbyHospitals', params: { automated: 'true' } })}
+                >
+                    <Ionicons name="business" size={17} color="#1A237E" />
+                    <Text style={styles.nearMeText}>Hospitals Near Me</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.nearMeBtn, { flex: 1, marginTop: 0, borderColor: '#047857' }]}
+                    onPress={() => router.push('/DoctorList')}
+                >
+                    <FontAwesome5 name="user-md" size={15} color="#047857" />
+                    <Text style={[styles.nearMeText, { color: '#047857' }]}>Doctors Near Me</Text>
+                </TouchableOpacity>
+            </View>
         </Animated.View>
     );
 
     const renderStep2 = () => (
         <Animated.View entering={SlideInRight} style={styles.stepContainer}>
+            {/* Real-time Doctor Search Bar */}
+            <View style={styles.drSearchBox}>
+                <Ionicons name="search" size={18} color="#64748B" />
+                <TextInput
+                    style={styles.drSearchInput}
+                    placeholder="Search doctor, hospital, or specialty..."
+                    value={doctorSearchQuery}
+                    onChangeText={setDoctorSearchQuery}
+                    placeholderTextColor="#94A3B8"
+                    clearButtonMode="while-editing"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                />
+                {doctorSearchQuery ? (
+                    <TouchableOpacity onPress={() => setDoctorSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                    </TouchableOpacity>
+                ) : null}
+            </View>
+
             <View style={{ gap: 15 }}>
-                {doctorList.length === 0 ? (
+                {filteredDoctorList.length === 0 ? (
                     <View style={styles.emptyContainer}>
                         <Ionicons name="people-outline" size={60} color="#CBD5E1" />
                         <Text style={styles.emptyTitle}>No Doctors Available</Text>
-                        <Text style={styles.emptySub}>No doctors have published slots for this specialty yet. Please try another one. </Text>
+                        <Text style={styles.emptySub}>
+                            {doctorSearchQuery
+                                ? `No doctors matching "${doctorSearchQuery}". Try clearing search.`
+                                : 'No doctors have published slots for this specialty yet. Please try another one.'}
+                        </Text>
                     </View>
                 ) : (
-                    doctorList.map((item) => (
+                    filteredDoctorList.map((item) => (
                         <TouchableOpacity
                             key={item.id}
                             style={[styles.doctorCard, selectedDoctor?.id === item.id && styles.activeCard]}
@@ -518,8 +646,23 @@ export default function BookAppointment() {
                                     <FontAwesome5 name="user-md" size={30} color={selectedDoctor?.id === item.id ? '#fff' : '#1A237E'} />
                                 </View>
                                 <View style={styles.drInfo}>
-                                    <Text style={[styles.drName, selectedDoctor?.id === item.id && styles.activeText]}>{item.name}</Text>
-                                    <Text style={[styles.drSub, selectedDoctor?.id === item.id && styles.activeText]}>{item.specialty} • {item.exp}</Text>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Text style={[styles.drName, selectedDoctor?.id === item.id && styles.activeText]}>{item.name}</Text>
+                                        {item.distance !== undefined && item.distance !== null ? (
+                                            <View style={styles.drDistanceBadge}>
+                                                <Ionicons name="location" size={10} color="#047857" />
+                                                <Text style={styles.drDistanceText}>{item.distance} km</Text>
+                                            </View>
+                                        ) : null}
+                                    </View>
+                                    <Text style={[styles.drSub, selectedDoctor?.id === item.id && styles.activeText]}>
+                                        {item.specialty} • {item.exp}
+                                    </Text>
+                                    {item.hospitalName ? (
+                                        <Text style={[styles.drHospitalSub, selectedDoctor?.id === item.id && styles.activeText]} numberOfLines={1}>
+                                            {item.hospitalName}
+                                        </Text>
+                                    ) : null}
                                     <View style={styles.ratingRow}>
                                         <Ionicons name="star" size={14} color="#FFD700" />
                                         <Text style={[styles.ratingText, selectedDoctor?.id === item.id && styles.activeText]}>{item.rating}</Text>
@@ -579,52 +722,118 @@ export default function BookAppointment() {
     const renderStep4 = () => (
         <View style={styles.stepContainer}>
             <Text style={styles.label}>2. Pick Date & Time</Text>
+
+            {doctorAvailableDates.length > 0 && (
+                <View style={styles.quickDateSection}>
+                    <Text style={styles.subLabel}>Available Doctor Dates:</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickDateRow}>
+                        {doctorAvailableDates.map((dateStr) => {
+                            const isSelected = toDateString(selectedDate) === dateStr;
+                            const count = ((selectedDoctor?.availableSlots?.length ? selectedDoctor.availableSlots : passedAvailability) || [])
+                                .filter((s: any) => (s.bookingDate || s.date) === dateStr && s.status !== 'booked' && !isSlotPassed(dateStr, s.slotTime || s.time)).length;
+                            return (
+                                <TouchableOpacity
+                                    key={dateStr}
+                                    style={[styles.quickDateCard, isSelected && styles.quickDateCardActive]}
+                                    onPress={() => {
+                                        setSelectedDate(new Date(`${dateStr}T00:00:00`));
+                                        setSelectedTimeSlot(null);
+                                    }}
+                                >
+                                    <Text style={[styles.quickDateBadge, isSelected && styles.quickDateBadgeActive]}>
+                                        {formatSlotDateBadge(dateStr)}
+                                    </Text>
+                                    <Text style={[styles.quickDateSub, isSelected && styles.quickDateSubActive]}>
+                                        {count} slot{count !== 1 ? 's' : ''}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
+                </View>
+            )}
+
             <TouchableOpacity style={styles.datePickerBtn} onPress={() => setShowDatePicker(true)}>
                 <Ionicons name="calendar" size={20} color="#1A237E" />
-                <Text style={styles.dateText}>{selectedDate.toDateString()}</Text>
+                <Text style={styles.dateText}>{formatSlotDateFull(toDateString(selectedDate))}</Text>
+                <Ionicons name="chevron-down" size={16} color="#64748B" style={{ marginLeft: 'auto' }} />
             </TouchableOpacity>
+
             {showDatePicker && (
                 <DateTimePicker
                     value={selectedDate}
                     mode="date"
                     minimumDate={new Date()}
-                    onChange={(e, d) => { setShowDatePicker(false); if (d) setSelectedDate(d); }}
+                    onChange={(e, d) => {
+                        setShowDatePicker(false);
+                        if (d) {
+                            setSelectedDate(d);
+                            setSelectedTimeSlot(null);
+                        }
+                    }}
                 />
             )}
 
-            <TouchableOpacity 
-                style={[styles.nextBtn, { marginTop: 10, marginBottom: 20, backgroundColor: (!selectedDoctor || !selectedDate) ? '#CBD5E1' : '#4CAF50' }]} 
-                onPress={loadSlots}
-                disabled={!selectedDoctor || !selectedDate || loadingSlots}
-            >
-                {loadingSlots ? <ActivityIndicator color="#fff" /> : <Text style={styles.nextBtnText}>Show Available Slots</Text>}
-            </TouchableOpacity>
-
-            <Text style={styles.subLabel}>Available Slots</Text>
-            <View style={styles.slotGrid}>
-                {loadingSlots ? null : (
-                    slots.length === 0 ? <Text style={styles.subtext}>No slots available for this date.</Text> : (
-                        slots.map((s: any) => (
-                            <TouchableOpacity
-                                key={s._id}
-                                disabled={s.status !== 'available'}
-                                style={[
-                                    styles.slotBtn,
-                                    selectedTimeSlot?._id === s._id && styles.activeSlot,
-                                    s.status !== 'available' && { backgroundColor: '#f0f0f0', opacity: 0.5 }
-                                ]}
-                                onPress={() => setSelectedTimeSlot(s)}
-                            >
-                                <Text style={[
-                                    styles.slotText,
-                                    selectedTimeSlot?._id === s._id && styles.activeText,
-                                    s.status !== 'available' && { color: '#999' }
-                                ]}>{s.time}</Text>
-                            </TouchableOpacity>
-                        ))
-                    )
-                )}
+            <View style={styles.slotHeaderRow}>
+                <Text style={styles.subLabel}>Available Slots</Text>
+                {loadingSlots && <ActivityIndicator size="small" color="#1A237E" />}
             </View>
+
+            {loadingSlots ? (
+                <View style={styles.slotLoadingContainer}>
+                    <ActivityIndicator size="large" color="#1A237E" />
+                    <Text style={styles.loadingText}>Loading published slots...</Text>
+                </View>
+            ) : (() => {
+                const dateKey = toDateString(selectedDate);
+                const visibleSlots = slots.filter((s: any) => !isSlotPassed(s.bookingDate || s.date || dateKey, s.slotTime || s.time));
+                if (visibleSlots.length === 0) {
+                    return (
+                        <View style={styles.emptySlotBox}>
+                            <Ionicons name="time-outline" size={36} color="#94A3B8" />
+                            <Text style={styles.emptySlotTitle}>No Slots On This Date</Text>
+                            <Text style={styles.emptySlotSub}>
+                                {doctorAvailableDates.length > 0
+                                    ? 'The doctor has published slots on other dates. Tap an available date above.'
+                                    : 'This doctor has not published any slots for this date.'}
+                            </Text>
+                        </View>
+                    );
+                }
+                return (
+                    <View style={styles.slotGrid}>
+                        {visibleSlots.map((s: any) => {
+                            const isSelected = (selectedTimeSlot?.id || selectedTimeSlot?._id) === (s.id || s._id);
+                            const formattedTime = formatTime12Hour(s.slotTime || s.time);
+                            return (
+                                <TouchableOpacity
+                                    key={s._id || s.id}
+                                    disabled={s.status !== 'available'}
+                                    style={[
+                                        styles.slotBtn,
+                                        isSelected && styles.activeSlot,
+                                        s.status !== 'available' && styles.disabledSlot
+                                    ]}
+                                    onPress={() => setSelectedTimeSlot(s)}
+                                >
+                                    <Ionicons 
+                                        name="time-outline" 
+                                        size={13} 
+                                        color={isSelected ? '#fff' : (s.status !== 'available' ? '#94A3B8' : '#1A237E')} 
+                                        style={{ marginRight: 4 }}
+                                    />
+                                    <Text style={[
+                                        styles.slotText,
+                                        isSelected && styles.activeText,
+                                        s.status !== 'available' && { color: '#94A3B8' }
+                                    ]}>{formattedTime}</Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                );
+            })()}
+
             {selectedTimeSlot && (
                 <TouchableOpacity style={styles.nextBtn} onPress={handleNextStep}>
                     <Text style={styles.nextBtnText}>Review & Confirm</Text>
@@ -638,9 +847,10 @@ export default function BookAppointment() {
             <Text style={styles.label}>3. Confirm Visit</Text>
             <View style={styles.confirmSummary}>
                 <Text style={styles.summaryLine}>Doctor: Dr. {selectedDoctor?.name}</Text>
+                <Text style={styles.summaryLine}>Specialty: {selectedDoctor?.specialty || 'General Physician'}</Text>
                 <Text style={styles.summaryLine}>Type: {consultType}</Text>
-                <Text style={styles.summaryLine}>Date: {selectedTimeSlot?.bookingDate || selectedTimeSlot?.date || toDateString(selectedDate)}</Text>
-                <Text style={styles.summaryLine}>Time: {selectedTimeSlot?.time}</Text>
+                <Text style={styles.summaryLine}>Date: {formatSlotDateFull(selectedTimeSlot?.bookingDate || selectedTimeSlot?.date || toDateString(selectedDate))}</Text>
+                <Text style={styles.summaryLine}>Time: {formatTime12Hour(selectedTimeSlot?.slotTime || selectedTimeSlot?.time)}</Text>
             </View>
             <TextInput
                 style={[styles.input, styles.reasonInput]}
@@ -693,7 +903,7 @@ export default function BookAppointment() {
                         <Text style={styles.successTitle}>Booking Verified!</Text>
                         <Text style={styles.successMsg}>
                             Confirmed Dr. {selectedDoctor?.name}{'\n'}
-                            on {selectedDate.toDateString()} at {selectedTimeSlot?.time}
+                            on {formatSlotDateFull(selectedTimeSlot?.bookingDate || selectedTimeSlot?.date || toDateString(selectedDate))} at {formatTime12Hour(selectedTimeSlot?.slotTime || selectedTimeSlot?.time)}
                         </Text>
                         <View style={styles.qrPlaceholder}>
                             <Ionicons name="qr-code" size={100} color="#333" />
@@ -779,6 +989,45 @@ const styles = StyleSheet.create({
     aiMatchText: { color: '#fff', fontWeight: 'bold', marginLeft: 10 },
     nextBtn: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 15, alignItems: 'center', marginTop: 30 },
     nextBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+    drSearchBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#fff',
+        borderRadius: 14,
+        paddingHorizontal: 14,
+        height: 48,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        marginBottom: 16,
+    },
+    drSearchInput: {
+        flex: 1,
+        marginLeft: 8,
+        fontSize: 14,
+        color: '#1E293B',
+        fontWeight: '600',
+    },
+    drDistanceBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#ECFDF5',
+        borderRadius: 10,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        gap: 3,
+        borderWidth: 1,
+        borderColor: '#A7F3D0',
+    },
+    drDistanceText: {
+        fontSize: 10,
+        fontWeight: '800',
+        color: '#047857',
+    },
+    drHospitalSub: {
+        fontSize: 11,
+        color: '#64748B',
+        marginTop: 1,
+    },
     doctorCard: {
         backgroundColor: '#fff',
         padding: 18,
@@ -804,13 +1053,99 @@ const styles = StyleSheet.create({
     activeType: { backgroundColor: '#1A237E' },
     selectedDoctorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#E0E7FF' },
     selectedDoctorName: { fontSize: 16, fontWeight: '800', color: '#1E293B' },
-    datePickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 20 },
-    dateText: { marginLeft: 10, fontSize: 16 },
-    subLabel: { fontSize: 16, fontWeight: 'bold', marginBottom: 15, color: '#1A237E' },
+    quickDateSection: { marginBottom: 16 },
+    quickDateRow: { flexDirection: 'row', gap: 10, paddingVertical: 4 },
+    quickDateCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 14,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+        borderWidth: 1.5,
+        borderColor: '#E2E8F0',
+        minWidth: 100,
+    },
+    quickDateCardActive: {
+        backgroundColor: '#1A237E',
+        borderColor: '#1A237E',
+    },
+    quickDateBadge: {
+        fontSize: 13,
+        fontWeight: '800',
+        color: '#1E293B',
+        marginBottom: 2,
+    },
+    quickDateBadgeActive: {
+        color: '#FFFFFF',
+    },
+    quickDateSub: {
+        fontSize: 11,
+        color: '#059669',
+        fontWeight: '700',
+    },
+    quickDateSubActive: {
+        color: '#A7F3D0',
+    },
+    datePickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#E2E8F0' },
+    dateText: { marginLeft: 10, fontSize: 15, fontWeight: '700', color: '#1E293B' },
+    slotHeaderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+    },
+    subLabel: { fontSize: 16, fontWeight: 'bold', color: '#1A237E' },
+    slotLoadingContainer: {
+        alignItems: 'center',
+        paddingVertical: 30,
+    },
+    loadingText: {
+        color: '#64748B',
+        fontSize: 13,
+        fontWeight: '600',
+        marginTop: 8,
+    },
+    emptySlotBox: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        padding: 24,
+        marginVertical: 10,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    emptySlotTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#1E293B',
+        marginTop: 8,
+    },
+    emptySlotSub: {
+        fontSize: 12,
+        color: '#64748B',
+        textAlign: 'center',
+        marginTop: 4,
+        lineHeight: 18,
+    },
     slotGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-    slotBtn: { width: '31%', backgroundColor: '#fff', padding: 12, borderRadius: 10, alignItems: 'center', marginBottom: 10, elevation: 1 },
-    activeSlot: { backgroundColor: '#1A237E' },
-    slotText: { color: '#1A237E', fontWeight: '500' },
+    slotBtn: {
+        width: '31%',
+        backgroundColor: '#fff',
+        paddingVertical: 12,
+        paddingHorizontal: 8,
+        borderRadius: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 10,
+        elevation: 1,
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+    },
+    activeSlot: { backgroundColor: '#1A237E', borderColor: '#1A237E' },
+    disabledSlot: { backgroundColor: '#F1F5F9', borderColor: '#E2E8F0', opacity: 0.5 },
+    slotText: { color: '#1A237E', fontWeight: '700', fontSize: 12 },
     input: { backgroundColor: '#fff', borderRadius: 12, padding: 15, marginBottom: 15, borderWidth: 1, borderColor: '#E2E8F0' },
     reasonInput: { minHeight: 100 },
     confirmSummary: { backgroundColor: '#fff', borderRadius: 15, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#E2E8F0' },

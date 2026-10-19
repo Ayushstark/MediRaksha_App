@@ -96,6 +96,9 @@ export const findHospitalsNearby = async (lat, lng, radiusKm = 10, options = {})
 
 export const searchHospitals = async (filters = {}) => {
   const {
+    q              = null,
+    query: term    = null,
+    name           = null,
     city           = null,
     facilityType   = null,
     departmentName = null,
@@ -108,7 +111,18 @@ export const searchHospitals = async (filters = {}) => {
   const conditions = ['h.is_active = TRUE'];
   const offset = (page - 1) * limit;
 
-  if (city) {
+  const searchKeyword = (q || term || name || '').trim();
+  if (searchKeyword) {
+    const pattern = `%${searchKeyword.toLowerCase()}%`;
+    conditions.push(`(
+      LOWER(h.hospital_name) LIKE ${p(pattern)} OR
+      LOWER(h.address) LIKE ${p(pattern)} OR
+      LOWER(h.city) LIKE ${p(pattern)} OR
+      LOWER(h.state) LIKE ${p(pattern)}
+    )`);
+  }
+
+  if (city && !searchKeyword) {
     conditions.push(`LOWER(h.city) LIKE ${p(`%${city.toLowerCase()}%`)}`);
   }
 

@@ -1,30 +1,145 @@
 import API from '../apiClient';
+import { findCanonicalSpecialization } from '../constants/specializations';
 
 export const toDateString = (value: Date) => {
   const offset = value.getTimezoneOffset();
   return new Date(value.getTime() - offset * 60 * 1000).toISOString().split('T')[0];
 };
 
-export const normalizeTime = (value: any) => String(value ?? '').slice(0, 5);
+export const normalizeTime = (value: any) => {
+  const str = String(value ?? '').trim();
+  return parseTo24Hour(str);
+};
+
+export const parseTo24Hour = (timeStr: any): string => {
+  const str = String(timeStr ?? '').trim();
+  if (!str) return '09:00';
+  const cleanStr = str.includes('-') ? str.split('-')[0].trim() : str;
+  const match12 = cleanStr.match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?\s*(AM|PM)$/i);
+  if (match12) {
+    let hours = parseInt(match12[1], 10);
+    const minutes = match12[2];
+    const ampm = match12[3].toUpperCase();
+    if (ampm === 'PM' && hours < 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return `${hours.toString().padStart(2, '0')}:${minutes}`;
+  }
+  const match24 = cleanStr.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
+  if (match24) {
+    const hours = parseInt(match24[1], 10).toString().padStart(2, '0');
+    return `${hours}:${match24[2]}`;
+  }
+  return cleanStr.slice(0, 5);
+};
+
+export const formatTime12Hour = (timeStr: any): string => {
+  const str = String(timeStr ?? '').trim();
+  if (!str) return '';
+  if (str.includes('-')) {
+    const parts = str.split('-').map(p => formatTime12Hour(p.trim()));
+    return parts.join(' - ');
+  }
+  const match12 = str.match(/^(\d{1,2}):([0-5]\d)\s*(AM|PM)$/i);
+  if (match12) {
+    const hours = parseInt(match12[1], 10).toString().padStart(2, '0');
+    return `${hours}:${match12[2]} ${match12[3].toUpperCase()}`;
+  }
+  const match24 = str.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
+  if (match24) {
+    let hours = parseInt(match24[1], 10);
+    const minutes = match24[2];
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    return `${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+  }
+  return str;
+};
+
+export const formatSlotDateBadge = (dateStr?: string | null): string => {
+  if (!dateStr) return '';
+  const cleanDate = String(dateStr).slice(0, 10);
+  const today = toDateString(new Date());
+
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrowStr = toDateString(tomorrowDate);
+
+  if (cleanDate === today) return 'Today';
+  if (cleanDate === tomorrowStr) return 'Tomorrow';
+
+  const d = new Date(`${cleanDate}T00:00:00`);
+  if (isNaN(d.getTime())) return cleanDate;
+
+  return d.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+  });
+};
+
+export const formatSlotDateFull = (dateInput?: Date | string | null): string => {
+  if (!dateInput) return '';
+  const dateObj = typeof dateInput === 'string' ? new Date(`${dateInput.slice(0, 10)}T00:00:00`) : dateInput;
+  if (!dateObj || isNaN(dateObj.getTime())) return String(dateInput);
+  return dateObj.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
 
 export const formatAppointmentDateTime = (appointment: any) => {
   const date = String(appointment.appointmentDate ?? appointment.date ?? '').slice(0, 10);
-  const time = normalizeTime(appointment.slotTime ?? appointment.startTime ?? appointment.time);
-  if (!date && !time) return 'Date/time not set';
-  const dateLabel = date ? new Date(`${date}T00:00:00`).toLocaleDateString() : 'Date not set';
-  return time ? `${dateLabel} at ${time}` : dateLabel;
+  const rawTime = appointment.slotTime ?? appointment.startTime ?? appointment.time;
+  if (!date && !rawTime) return 'Date/time not set';
+  const formattedTime = formatTime12Hour(rawTime);
+  const dateLabel = date ? formatSlotDateFull(date) : 'Date not set';
+  return formattedTime ? `${dateLabel} at ${formattedTime}` : dateLabel;
 };
 
 export const normalizeSpeciality = (value: any) => {
   const text = String(value || '').trim();
+  if (!text) return 'General Physician';
+  const canonical = findCanonicalSpecialization(text);
+  if (canonical) return canonical;
   const normalized = text.toLowerCase();
-  if (!normalized || normalized === 'general' || normalized === 'general medicine') return 'General Physician';
+  if (normalized === 'general' || normalized === 'general medicine') return 'General Physician';
   if (normalized === 'cardiology' || normalized === 'cardiologist') return 'Cardiologist';
   if (normalized === 'neurology' || normalized === 'neurologist') return 'Neurologist';
-  if (normalized === 'orthopedics' || normalized === 'orthopedic') return 'Orthopedics';
-  if (normalized === 'pediatrics' || normalized === 'pediatrician') return 'Pediatrics';
-  if (normalized === 'dermatology' || normalized === 'dermatologist') return 'Dermatology';
+  if (normalized === 'orthopedics' || normalized === 'orthopedic') return 'Orthopedic Surgeon';
+  if (normalized === 'pediatrics' || normalized === 'pediatrician') return 'Pediatrician';
+  if (normalized === 'dermatology' || normalized === 'dermatologist') return 'Dermatologist';
   return text;
+};
+
+export const isSlotPassed = (dateStr?: string | null, timeStr?: string | null): boolean => {
+  if (!dateStr || !timeStr) return false;
+  const todayStr = toDateString(new Date());
+  const cleanDate = String(dateStr).slice(0, 10);
+  if (cleanDate < todayStr) return true;
+  if (cleanDate > todayStr) return false;
+
+  const now = new Date();
+  const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const time24 = parseTo24Hour(timeStr);
+  const [slotHours, slotMinutes] = time24.split(':').map(Number);
+  if (isNaN(slotHours) || isNaN(slotMinutes)) return false;
+  const slotTotalMinutes = slotHours * 60 + slotMinutes;
+
+  return slotTotalMinutes <= currentTotalMinutes;
+};
+
+export const filterUpcomingSlots = (slots: any[]): any[] => {
+  if (!Array.isArray(slots)) return [];
+  return slots.filter((slot: any) => {
+    if (!slot) return false;
+    if (slot.status === 'booked') return false;
+    const date = slot.bookingDate || slot.date;
+    const time = slot.slotTime || slot.time;
+    return !isSlotPassed(date, time);
+  });
 };
 
 export const normalizeDoctor = (doctor: any) => ({
@@ -34,10 +149,16 @@ export const normalizeDoctor = (doctor: any) => ({
   doctorId: String(doctor.id ?? doctor._id ?? ''),
   specialization: normalizeSpeciality(doctor.speciality ?? doctor.specialization),
   specialty: normalizeSpeciality(doctor.speciality ?? doctor.specialization),
+  latitude: doctor.latitude !== undefined && doctor.latitude !== null ? Number(doctor.latitude) : undefined,
+  longitude: doctor.longitude !== undefined && doctor.longitude !== null ? Number(doctor.longitude) : undefined,
+  distance: doctor.distance !== undefined && doctor.distance !== null ? Number(doctor.distance) : undefined,
+  address: doctor.address || doctor.hospitalAddress,
+  experience: doctor.experience ? Number(doctor.experience) : 8,
+  rating: doctor.rating ? Number(doctor.rating) : 4.8,
   availableSlots: Array.isArray(doctor.availableSlots)
-    ? doctor.availableSlots.map(normalizeSlot)
+    ? filterUpcomingSlots(doctor.availableSlots.map(normalizeSlot))
     : Array.isArray(doctor.slots)
-      ? doctor.slots.map(normalizeSlot)
+      ? filterUpcomingSlots(doctor.slots.map(normalizeSlot))
       : [],
 });
 
@@ -68,15 +189,23 @@ export const normalizeAppointment = (appointment: any) => ({
   },
 });
 
-export const normalizeSlot = (slot: any) => ({
-  ...slot,
-  _id: String(slot.id ?? slot._id ?? ''),
-  id: String(slot.id ?? slot._id ?? ''),
-  bookingDate: String(slot.bookingDate ?? slot.date ?? '').slice(0, 10),
-  date: String(slot.date ?? slot.bookingDate ?? '').slice(0, 10),
-  slotTime: String(slot.slotTime ?? slot.time ?? '').slice(0, 5),
-  time: String(slot.time ?? slot.slotTime ?? '').slice(0, 5),
-});
+export const normalizeSlot = (slot: any) => {
+  if (!slot || typeof slot !== 'object') return null;
+  const rawDate = String(slot.bookingDate ?? slot.date ?? '').slice(0, 10);
+  const rawTime = String(slot.slotTime ?? slot.time ?? '').trim();
+  const time24 = parseTo24Hour(rawTime);
+  const displayTime = formatTime12Hour(rawTime || time24);
+  return {
+    ...slot,
+    _id: String(slot.id ?? slot._id ?? ''),
+    id: String(slot.id ?? slot._id ?? ''),
+    bookingDate: rawDate,
+    date: rawDate,
+    slotTime: time24,
+    time: time24,
+    displayTime,
+  };
+};
 
 export async function getCurrentProfile(role?: string) {
   const isDoctor = role === 'Doctor';
@@ -87,7 +216,14 @@ export async function getCurrentProfile(role?: string) {
     : { ...normalizePatient(data), role: 'Patient' };
 }
 
-export async function getDoctors() {
+export async function getDoctors(params?: {
+  latitude?: number;
+  longitude?: number;
+  radius?: number;
+  specialty?: string;
+  search?: string;
+  nearby?: boolean;
+}) {
   const byId = new Map<string, any>();
   const addDoctors = (items: any) => {
     const doctors = Array.isArray(items) ? items : items ? [items] : [];
@@ -97,15 +233,36 @@ export async function getDoctors() {
   };
 
   try {
-    const myDoctor = await API.get('/user/doctor/my');
-    addDoctors(myDoctor.data?.data ?? myDoctor.data);
-  } catch (error: any) {
-    if (error?.response?.status && error.response.status !== 404) {
-      console.warn('Could not fetch registered doctor:', error.response.status);
+    const queryParams: any = {};
+    if (params?.latitude !== undefined && params?.longitude !== undefined) {
+      queryParams.lat = params.latitude;
+      queryParams.lon = params.longitude;
     }
+    if (params?.radius) queryParams.radius = params.radius;
+    if (params?.specialty && params.specialty !== 'All') queryParams.specialty = params.specialty;
+    if (params?.search) queryParams.q = params.search;
+    if (params?.nearby) queryParams.nearby = 'true';
+
+    const allRes = await API.get('/user/doctor/all', { params: queryParams });
+    const data = allRes.data?.data ?? allRes.data;
+    if (Array.isArray(data) && data.length > 0) {
+      return data.map((doc: any) => ({
+        ...normalizeDoctor(doc),
+        availableSlots: Array.isArray(doc.availableSlots)
+          ? filterUpcomingSlots(doc.availableSlots.map(normalizeSlot))
+          : [],
+      }));
+    }
+  } catch (err) {
+    console.warn('Direct doctor fetch failed, falling back:', err);
   }
 
-  const searchTerms = ['ra', 'ar', 'ma', 'sh', 'ch', 'an', 'dr', 'ku', 'pa', 'sa', 'ka', 'na'];
+  try {
+    const myDoctor = await API.get('/user/doctor/my');
+    addDoctors(myDoctor.data?.data ?? myDoctor.data);
+  } catch (error: any) {}
+
+  const searchTerms = ['a', 'e', 'i', 'o', 'u', 'r', 's', 'dr'];
   const responses = await Promise.allSettled(
     searchTerms.map(term => API.get(`/user/doctor/search/${encodeURIComponent(term)}`))
   );
@@ -124,7 +281,6 @@ export async function getDoctors() {
         const availableSlots = await getAvailableSlots(doctor.id, '');
         return { ...doctor, availableSlots };
       } catch (error: any) {
-        console.warn(`Could not fetch slots for doctor ${doctor.id}:`, error?.response?.status || error?.message);
         return { ...doctor, availableSlots: [] };
       }
     })
@@ -137,7 +293,8 @@ export async function getAvailableSlots(doctorId: string, date: string) {
   const response = await API.get(`/user/meetings/slot/${doctorId}`, { params: date ? { date } : undefined });
   const slots = response.data?.availableSlots ?? response.data?.data ?? [];
   const normalizedSlots = Array.isArray(slots) ? slots.map(normalizeSlot) : [];
-  return date ? normalizedSlots.filter(slot => slot.bookingDate === date || slot.date === date) : normalizedSlots;
+  const upcomingSlots = filterUpcomingSlots(normalizedSlots);
+  return date ? upcomingSlots.filter(slot => slot.bookingDate === date || slot.date === date) : upcomingSlots;
 }
 
 export async function bookAppointment(payload: {
@@ -225,16 +382,52 @@ export async function getDoctorPatients() {
   return [...byId.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 }
 
-export async function getDoctorSlots() {
-  const response = await API.get('/doctor/slot/all');
+export async function getDoctorSlots(params?: { status?: string; fromDate?: string; toDate?: string }) {
+  const response = await API.get('/doctor/slot/all', { params });
   const slots = response.data?.data ?? response.data ?? [];
-  return Array.isArray(slots) ? slots.map(normalizeSlot) : [];
+  const normalized = Array.isArray(slots) ? slots.map(normalizeSlot).filter(Boolean) : [];
+  return normalized;
 }
 
-export async function publishDoctorSlot(bookingDate: string, slotTime: string) {
-  const response = await API.post('/doctor/slot/publish', { bookingDate, slotTime });
-  const slot = response.data?.data ?? response.data;
-  return normalizeSlot(Array.isArray(slot) ? slot[0] : slot);
+export async function publishDoctorSlotsSchedule(payload: {
+  startDate: string;
+  endDate: string;
+  slotDurationMinutes: number;
+  weeklyRules: { dayOfWeek: number; startTime: string; endTime: string }[];
+}) {
+  const response = await API.post('/doctor/slot/publish', payload);
+  return response.data;
+}
+
+export async function publishDoctorSlot(
+  bookingDateOrPayload:
+    | string
+    | {
+        bookingDate: string;
+        startTime?: string;
+        endTime?: string;
+        slotTime?: string;
+        slotDurationMinutes?: number;
+      },
+  maybeSlotTime?: string
+) {
+  const payload =
+    typeof bookingDateOrPayload === 'string'
+      ? { bookingDate: bookingDateOrPayload, slotTime: maybeSlotTime }
+      : bookingDateOrPayload;
+
+  const response = await API.post('/doctor/slot/publish', payload);
+  return response.data;
+}
+
+export async function deleteDoctorSlot(slotId: string | number) {
+  const response = await API.delete(`/doctor/slot/${slotId}`);
+  return response.data;
+}
+
+export async function deleteDoctorSlotsByRange(fromDate: string, toDate: string) {
+  const response = await API.delete('/doctor/slot', { params: { fromDate, toDate } });
+  return response.data;
 }
 
 export async function deleteDoctorSlotsBulk(slotIds: string[]) {

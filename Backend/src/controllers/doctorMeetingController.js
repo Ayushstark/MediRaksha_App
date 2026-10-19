@@ -1,6 +1,6 @@
 import { pool } from '../config/db.js';
 
-const VALID_APPOINTMENT_STATUSES = new Set(['pending', 'confirmed', 'cancelled', 'completed']);
+const VALID_APPOINTMENT_STATUSES = new Set(['pending', 'confirmed', 'cancelled', 'completed', 'missed']);
 const REPORT_METADATA_COLUMNS = `
   r."id", r."userId", r."uploadedBy", r."doctorId", r."title", r."category",
   r."fileSize", r."mimeType", r."visibility", r."originalFileName",
@@ -17,6 +17,25 @@ export const getAllMeetings = async (req, res) => {
   }
 
   try {
+    // Automatically mark passed pending or confirmed appointments as 'missed'
+    await pool.query(
+      `UPDATE "Appointment"
+       SET status = 'missed', "updated_at" = NOW()
+       WHERE "doctorId" = $1 AND status IN ('pending', 'confirmed')
+         AND ("appointmentDate" < CURRENT_DATE OR ("appointmentDate" = CURRENT_DATE AND "slotTime"::time <= CURRENT_TIME))`,
+      [doctorId]
+    );
+
+    // Also mark linked booked slots as 'missed'
+    await pool.query(
+      `UPDATE "Slot"
+       SET status = 'missed', "updated_at" = NOW()
+       WHERE "doctorId" = $1 AND id IN (
+         SELECT "slotId" FROM "Appointment"
+         WHERE "doctorId" = $1 AND status = 'missed' AND "slotId" IS NOT NULL
+       ) AND status = 'booked'`,
+      [doctorId]
+    );
     let query = `
       SELECT
         a.id AS "Id", TO_CHAR(a."appointmentDate", 'YYYY-MM-DD') AS "appointmentDate", a."slotTime", a.status, a."reasonOfAppointment",
@@ -181,7 +200,7 @@ export const completeMeeting = async (req, res) => {
     await client.query('BEGIN');
 
     const { rows: appointments } = await client.query(
-      `SELECT id, "userId", status FROM "Appointment"
+      `SELECT id, "userId", "slotId", status FROM "Appointment"
        WHERE id = $1 AND "doctorId" = $2
        FOR UPDATE`,
       [id, doctorId]
@@ -202,6 +221,13 @@ export const completeMeeting = async (req, res) => {
       `UPDATE "Appointment" SET status = 'completed', "updated_at" = NOW() WHERE id = $1`,
       [id]
     );
+
+    if (appointment.slotId) {
+      await client.query(
+        `UPDATE "Slot" SET status = 'completed', "updated_at" = NOW() WHERE id = $1`,
+        [appointment.slotId]
+      );
+    }
 
     const { rowCount: deletedReports } = await client.query(
       `DELETE FROM "Report"

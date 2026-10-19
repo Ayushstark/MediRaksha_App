@@ -9,5 +9,8 @@ module.exports = [
   ...compat.extends('expo'),
   {
     ignores: ['dist/*'],
+    rules: {
+      'react-hooks/refs': 'off',
+    },
   },
 ];

@@ -9,7 +9,9 @@ import {
   TouchableOpacity,
   TextInput,
   Platform,
+  StatusBar,
   RefreshControl,
+  Keyboard,
 } from 'react-native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LogBox } from "react-native";
@@ -355,8 +357,20 @@ export default function NearbyHospitals() {
       suppressAutocomplete.current = false;
       return;
     }
-    if (query.length < 3 || query === 'Current location') {
+    if (query.length < 3 || query.toLowerCase() === 'current location') {
       autocompleteRequest.current += 1;
+      setLocationSuggestions([]);
+      return;
+    }
+
+    // If local hospitals match this query, don't show external geocoding dropdown
+    const localMatchCount = hospitals.filter(h =>
+      (h.name && h.name.toLowerCase().includes(query.toLowerCase())) ||
+      (h.address && h.address.toLowerCase().includes(query.toLowerCase())) ||
+      (h.speciality && h.speciality.toLowerCase().includes(query.toLowerCase()))
+    ).length;
+
+    if (localMatchCount > 0) {
       setLocationSuggestions([]);
       return;
     }
@@ -377,7 +391,7 @@ export default function NearbyHospitals() {
     }, 700);
 
     return () => clearTimeout(timer);
-  }, [locationQuery]);
+  }, [locationQuery, hospitals]);
 
   useEffect(() => {
     if (location) {
@@ -395,13 +409,24 @@ export default function NearbyHospitals() {
       );
     }
 
+    // Filter by search query if typed
+    const q = locationQuery.trim().toLowerCase();
+    if (q && q !== 'current location') {
+      filtered = filtered.filter(h =>
+        (h.name && h.name.toLowerCase().includes(q)) ||
+        (h.address && h.address.toLowerCase().includes(q)) ||
+        (h.speciality && h.speciality.toLowerCase().includes(q))
+      );
+    }
+
     setFilteredHospitals(filtered);
-  }, [selectedSpeciality, hospitals]);
+  }, [selectedSpeciality, hospitals, locationQuery]);
 
   const selectLocation = async (suggestion: LocationSuggestion) => {
     suppressAutocomplete.current = true;
     setLocationQuery(suggestion.label);
     setLocationSuggestions([]);
+    Keyboard.dismiss();
     const coords = {
       latitude: suggestion.latitude,
       longitude: suggestion.longitude,
@@ -445,20 +470,24 @@ export default function NearbyHospitals() {
     await selectLocation(suggestion);
   };
 
-  const clearSearch = async () => {
+  const clearSearch = () => {
     suppressAutocomplete.current = true;
     setLocationQuery('');
     setLocationSuggestions([]);
-    if (deviceLocation) {
-      setLocation(deviceLocation);
-      setLoading(true);
-      await fetchHospitals(deviceLocation.latitude, deviceLocation.longitude, searchRadius);
-    }
+    Keyboard.dismiss();
   };
 
   const searchTypedLocation = async () => {
     const query = locationQuery.trim();
     if (!query) return;
+
+    // If local hospitals match, dismiss keyboard and display them
+    if (filteredHospitals.length > 0) {
+      Keyboard.dismiss();
+      setLocationSuggestions([]);
+      return;
+    }
+
     if (locationSuggestions.length > 0) {
       await selectSuggestion(locationSuggestions[0]);
       return;
@@ -467,7 +496,7 @@ export default function NearbyHospitals() {
     try {
       const item = (await fetchLocationSuggestions(query, 1))[0];
       if (!item) {
-        Alert.alert('Location Not Found', 'Try entering a more specific city, area, landmark, or address.');
+        Alert.alert('No Results', `No hospitals found matching "${query}". Try searching another area or increasing the radius.`);
         return;
       }
       await selectSuggestion(item);
@@ -540,7 +569,7 @@ export default function NearbyHospitals() {
         <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search a hospital or location..."
+          placeholder="Search hospital, speciality, or city..."
           value={locationQuery}
           onChangeText={setLocationQuery}
           onSubmitEditing={searchTypedLocation}
@@ -607,6 +636,7 @@ export default function NearbyHospitals() {
           data={SPECIALITIES}
           horizontal
           showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterList}
           keyExtractor={(item) => item}
           renderItem={({ item }) => (
             <TouchableOpacity
@@ -754,11 +784,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
-    paddingBottom: 12,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 24) + 12 : 50,
+    paddingBottom: 14,
     paddingHorizontal: 16,
     backgroundColor: '#fff',
-    borderBottomWidth: 2,
+    borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
   },
   backButton: {
@@ -843,44 +873,53 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   radiusButton: {
+    height: 32,
     paddingHorizontal: 12,
-    paddingVertical: 6,
     borderRadius: 16,
     backgroundColor: '#e0e0e0',
     marginRight: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   radiusButtonActive: {
     backgroundColor: '#1A237E',
   },
   radiusButtonText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#666',
   },
   radiusButtonTextActive: {
     color: '#fff',
   },
   filterContainer: {
-    paddingVertical: 8,
-    paddingLeft: 16,
+    paddingVertical: 6,
     backgroundColor: '#fff',
   },
-  filterButton: {
+  filterList: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  filterButton: {
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     backgroundColor: '#e8f5e9',
     marginRight: 8,
     borderWidth: 1,
     borderColor: '#c8e6c9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
   },
   filterButtonActive: {
     backgroundColor: '#1A237E',
     borderColor: '#1A237E',
   },
   filterButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '700',
     color: '#1A237E',
   },
   filterButtonTextActive: {
